@@ -1,0 +1,44 @@
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Handle X-XSRF-Token Header
+    RewriteCond %{HTTP:x-xsrf-token} .
+    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
+
+    # Handle preflight OPTIONS requests for storage files with CORS
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteCond %{REQUEST_URI} ^/storage/
+    RewriteRule ^(.*)$ - [R=200,L,E=HTTP_ORIGIN:%{HTTP:Origin}]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# CORS Headers for Storage Files
+<IfModule mod_setenvif.c>
+    # Set environment variable for storage requests
+    SetEnvIf Request_URI "^/storage/" IS_STORAGE=1
+</IfModule>
+
+<IfModule mod_headers.c>
+    # Add CORS headers for storage file requests
+    Header always set Access-Control-Allow-Origin "*" env=IS_STORAGE
+    Header always set Access-Control-Allow-Methods "GET, OPTIONS" env=IS_STORAGE
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin" env=IS_STORAGE
+    Header always set Access-Control-Max-Age "86400" env=IS_STORAGE
+</IfModule>
