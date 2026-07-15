@@ -4,20 +4,46 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Article;
+use App\Support\EditorialArticlePresenter;
 use Illuminate\Http\Request;
 
+/**
+ * @group Articles
+ *
+ * News/editorial. List and fetch by id or slug; filter by category, top_news.
+ */
 class ArticleController extends Controller
 {
+    public function __construct(private readonly EditorialArticlePresenter $presenter)
+    {
+    }
+
+    /**
+     * List articles. Query: category, top_news, per_page.
+     */
     public function index(Request $request)
     {
         $query = Article::where('is_published', true)
-            ->with(['blocks', 'tags']);
+            ->with(['primaryCategory', 'authorUser', 'tags']);
 
-        if ($request->has('category')) {
-            $query->where('category', $request->category);
+        if ($request->filled('category')) {
+            $category = $request->string('category')->toString();
+
+            $query->where(function ($builder) use ($category) {
+                $builder->where('category', $category)
+                    ->orWhereHas('primaryCategory', function ($categoryQuery) use ($category) {
+                        $categoryQuery
+                            ->where('name', $category)
+                            ->orWhere('slug', $category);
+                    });
+            });
         }
 
-        if ($request->has('top_news')) {
+        if ($request->filled('post_type')) {
+            $query->where('post_type', $request->string('post_type')->toString());
+        }
+
+        if ($request->boolean('top_news')) {
             $query->where('is_top_news', true);
         }
 
@@ -25,8 +51,12 @@ class ArticleController extends Controller
             ->orderBy('is_top_news', 'desc')
             ->paginate($request->get('per_page', 10));
 
+        $articles->setCollection(
+            $articles->getCollection()->map(fn (Article $article) => $this->presenter->summary($article))
+        );
+
         return response()->json([
-            'data' => $articles->map(fn($article) => $this->formatArticle($article)),
+            'data' => $articles->items(),
             'meta' => [
                 'current_page' => $articles->currentPage(),
                 'last_page' => $articles->lastPage(),
@@ -40,60 +70,24 @@ class ArticleController extends Controller
     {
         // Support both slug and ID (backward compatibility)
         $article = Article::where('is_published', true)
-            ->with(['blocks', 'tags'])
+            ->with([
+                'blocks' => fn ($query) => $query->orderBy('order'),
+                'blocks.movie',
+                'blocks.tvShow',
+                'blocks.vj',
+                'tags',
+                'primaryCategory',
+                'authorUser',
+                'movie',
+                'tvShow',
+                'vj',
+            ])
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)
                       ->orWhere('slug', $id);
             })
             ->firstOrFail();
 
-        return response()->json($this->formatArticle($article));
-    }
-
-    private function formatArticle(Article $article): array
-    {
-        // Helper to get full URL for images
-        $getImageUrl = function ($path) {
-            if (empty($path)) return null;
-            if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-                return $path;
-            }
-            return asset('storage/' . $path);
-        };
-
-        return [
-            'id' => $article->id,
-            'slug' => $article->slug,
-            'title' => $article->title,
-            'excerpt' => $article->excerpt,
-            'author' => $article->author,
-            'image' => $getImageUrl($article->image),
-            'videoUrl' => $article->video_url,
-            'date' => $article->date->format('M d, Y'),
-            'category' => $article->category,
-            'tags' => $article->tags->pluck('tag')->toArray(),
-            'isTopNews' => $article->is_top_news,
-            'content' => $article->blocks->map(function ($block) {
-                $formatted = [
-                    'type' => $block->type,
-                ];
-
-                if ($block->type === 'text' || $block->type === 'quote') {
-                    $formatted['value'] = $block->value;
-                    if ($block->type === 'quote' && $block->author) {
-                        $formatted['author'] = $block->author;
-                    }
-                } elseif ($block->type === 'image') {
-                    $formatted['value'] = $block->value;
-                    if ($block->caption) {
-                        $formatted['caption'] = $block->caption;
-                    }
-                } elseif ($block->type === 'gallery') {
-                    $formatted['images'] = $block->gallery_images ?? [];
-                }
-
-                return $formatted;
-            })->toArray(),
-        ];
+        return response()->json($this->presenter->detail($article));
     }
 }

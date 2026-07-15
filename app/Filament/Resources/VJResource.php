@@ -90,8 +90,12 @@ class VJResource extends Resource
                             ->required(),
                     ])->columns(2),
 
-                Forms\Components\Section::make('Featuring')
+                Forms\Components\Section::make('Verification & Featuring')
                     ->schema([
+                        Forms\Components\Toggle::make('is_verified')
+                            ->label('Verified Creator')
+                            ->helperText('Show verified badge on VJ cards and profile')
+                            ->default(false),
                         Forms\Components\Toggle::make('is_featured')
                             ->label('Featured VJ')
                             ->helperText('Show this VJ in the Featured VJs section on the homepage')
@@ -116,6 +120,35 @@ class VJResource extends Resource
                 Forms\Components\Toggle::make('is_active')
                     ->label('Active')
                     ->default(true),
+
+                Forms\Components\Section::make('Push Notification on Save')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_push_on_save')
+                            ->label('Send push notification after save')
+                            ->default(false),
+                        Forms\Components\TextInput::make('push_title')
+                            ->label('Notification title')
+                            ->maxLength(255)
+                            ->helperText('Defaults to VJ name if left empty.'),
+                        Forms\Components\TextInput::make('push_body')
+                            ->label('Notification body')
+                            ->maxLength(255)
+                            ->helperText('Short message to show in the notification.'),
+                        Forms\Components\TextInput::make('push_image_url')
+                            ->label('Notification image URL')
+                            ->url()
+                            ->maxLength(1024)
+                            ->helperText('Optional image to show in the notification.'),
+                        Forms\Components\Select::make('push_target_platform')
+                            ->label('Target platform')
+                            ->options([
+                                'all' => 'All platforms',
+                                'android' => 'Android',
+                                'ios' => 'iOS',
+                                'web' => 'Web',
+                            ])
+                            ->default('all'),
+                    ])->columns(2),
             ]);
     }
 

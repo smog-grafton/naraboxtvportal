@@ -103,9 +103,17 @@ class TVShowResource extends Resource
                             ->required()
                             ->rows(3),
                         Forms\Components\Select::make('category_id')
-                            ->label('Category')
+                            ->label('Primary Category')
                             ->relationship('category', 'name')
+                            ->helperText('Main content category (e.g. Drama, Action). Use "Additional Categories" for VJ Translated.')
                             ->required(),
+                        Forms\Components\Select::make('categories')
+                            ->label('Additional Categories')
+                            ->relationship('categories', 'name')
+                            ->multiple()
+                            ->preload()
+                            ->searchable()
+                            ->helperText('Add "VJ Translated" here for translated shows. TV shows can have both a content category and VJ Translated.'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('Media')
@@ -138,12 +146,19 @@ class TVShowResource extends Resource
                             ->helperText('e.g., 45m'),
                     ])->columns(2),
 
-                Forms\Components\Section::make('Details')
+                Forms\Components\Section::make('VJ Translation (Creators)')
+                    ->description('Set the VJ for translated TV shows. This links the show to the VJ profile and enables VJ filtering.')
                     ->schema([
                         Forms\Components\Select::make('vj_id')
                             ->label('VJ (Translator)')
                             ->relationship('vj', 'name')
-                            ->searchable(),
+                            ->searchable()
+                            ->helperText('Required for VJ-translated shows. Select the VJ who translated this series to appear on their profile.'),
+                    ])
+                    ->collapsible(),
+
+                Forms\Components\Section::make('Details')
+                    ->schema([
                         Forms\Components\Select::make('genres')
                             ->multiple()
                             ->relationship('genres', 'name')
@@ -269,6 +284,70 @@ class TVShowResource extends Resource
                             ->helperText('Allow users to download episodes of this TV show'),
                     ]),
 
+                Forms\Components\Section::make('Compliance / Visibility')
+                    ->schema([
+                        Forms\Components\Select::make('content_status')
+                            ->label('Content Status')
+                            ->options([
+                                'draft' => 'Draft',
+                                'processing' => 'Processing',
+                                'published' => 'Published',
+                                'unlisted' => 'Unlisted',
+                                'suspended' => 'Suspended',
+                                'dmca_removed' => 'DMCA Removed',
+                            ])
+                            ->default('published')
+                            ->helperText('DMCA Removed disables playback and downloads while keeping the page visible with a notice.'),
+                    ]),
+
+                Forms\Components\Section::make('Push Notification on Save')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_push_on_save')
+                            ->label('Send push notification after save')
+                            ->default(false),
+                        Forms\Components\TextInput::make('push_title')
+                            ->label('Notification title')
+                            ->maxLength(255)
+                            ->helperText('Defaults to TV show title if left empty.'),
+                        Forms\Components\TextInput::make('push_body')
+                            ->label('Notification body')
+                            ->maxLength(255)
+                            ->helperText('Short message to show in the notification.'),
+                        Forms\Components\TextInput::make('push_image_url')
+                            ->label('Notification image URL')
+                            ->url()
+                            ->maxLength(1024)
+                            ->helperText('Optional image to show in the notification.'),
+                        Forms\Components\Select::make('push_target_platform')
+                            ->label('Target platform')
+                            ->options([
+                                'all' => 'All platforms',
+                                'android' => 'Android',
+                                'ios' => 'iOS',
+                                'web' => 'Web',
+                            ])
+                            ->default('all'),
+                    ])->columns(2),
+                Forms\Components\Section::make('Email & Inbox Notification on Save')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_email_on_save')
+                            ->label('Send email campaign after save')
+                            ->default(false),
+                        Forms\Components\Select::make('email_audience_type')
+                            ->options([
+                                'selected_users' => 'All registered users',
+                                'active_subscribers' => 'Active subscribers',
+                                'inactive_watchers' => 'Inactive watchers',
+                            ])
+                            ->default('selected_users'),
+                        Forms\Components\Toggle::make('email_marketing_only')
+                            ->label('Only users opted into marketing')
+                            ->default(true),
+                        Forms\Components\TextInput::make('email_subject_override')
+                            ->maxLength(255)
+                            ->helperText('Optional campaign title override.'),
+                    ])->columns(2),
+
                 Forms\Components\Toggle::make('is_active')
                     ->label('Active')
                     ->default(true),
@@ -304,6 +383,10 @@ class TVShowResource extends Resource
                 Tables\Columns\IconColumn::make('is_active')
                     ->label('Active')
                     ->boolean(),
+                Tables\Columns\TextColumn::make('content_status')
+                    ->label('Status')
+                    ->badge()
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
@@ -323,10 +406,48 @@ class TVShowResource extends Resource
                     ->label('Downloads Enabled'),
                 Tables\Filters\TernaryFilter::make('is_active')
                     ->label('Active'),
+                Tables\Filters\SelectFilter::make('content_status')
+                    ->label('Content Status')
+                    ->options([
+                        'draft' => 'Draft',
+                        'processing' => 'Processing',
+                        'published' => 'Published',
+                        'unlisted' => 'Unlisted',
+                        'suspended' => 'Suspended',
+                        'dmca_removed' => 'DMCA Removed',
+                    ]),
             ])
+            ->recordUrl(fn (TVShow $record) => static::getUrl('view', ['record' => $record]))
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('mark_dmca_removed')
+                    ->label('Mark DMCA Removed')
+                    ->icon('heroicon-o-shield-exclamation')
+                    ->requiresConfirmation()
+                    ->color('danger')
+                    ->action(function (TVShow $record) {
+                        $record->update(['content_status' => 'dmca_removed']);
+                        Notification::make()
+                            ->title('Content restricted')
+                            ->body('TV show marked as DMCA Removed. Playback and downloads are now blocked.')
+                            ->success()
+                            ->send();
+                    }),
+                Tables\Actions\Action::make('restore_content')
+                    ->label('Restore')
+                    ->icon('heroicon-o-arrow-uturn-left')
+                    ->requiresConfirmation()
+                    ->color('success')
+                    ->visible(fn (TVShow $record) => ($record->content_status ?? 'published') === 'dmca_removed')
+                    ->action(function (TVShow $record) {
+                        $record->update(['content_status' => 'published']);
+                        Notification::make()
+                            ->title('Content restored')
+                            ->body('TV show restored to Published.')
+                            ->success()
+                            ->send();
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

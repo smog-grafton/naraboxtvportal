@@ -10,8 +10,113 @@ use App\Models\PaymentTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
+/**
+ * @group Dashboard & Watch history
+ *
+ * User dashboard: subscription, rentals, purchases, transactions, watch history. Requires auth.
+ */
 class DashboardController extends Controller
 {
+    /**
+     * Get current user dashboard
+     *
+     * High-level snapshot of the user’s account state and purchases for
+     * powering the “Account / Dashboard” screen.
+     *
+     * Shape:
+     * - `user`: basic profile + plan label and status
+     * - `subscription`: active or most recent subscription (if any)
+     * - `pending_subscription`: latest pending subscription payment (if any)
+     * - `vault`:
+     *   - `rentedIds`: ids of currently rented movies/TV shows
+     *   - `purchasedIds`: ids of permanently owned movies/TV shows
+     *   - `watchHistory`: recent watch history entries
+     * - `rentals`: expanded list of active rentals
+     * - `purchases`: expanded list of purchases
+     * - `transactions`: all payment transactions with gateway and item info
+     *
+     * Plan semantics:
+     * - `plan` (string) is a human label like `FREE`, `Daily Access`, `Monthly Access`
+     * - `planStatus` is one of `NONE`, `ACTIVE`, `PENDING`, or any legacy status
+     *
+     * @authenticated
+     *
+     * @response 200 {
+     *  "user": {
+     *    "id": 1,
+     *    "name": "Jane Doe",
+     *    "email": "jane@example.com",
+     *    "phone": "+256780000000",
+     *    "avatar": null,
+     *    "plan": "Monthly Access",
+     *    "planStatus": "ACTIVE",
+     *    "renewalDate": "2026-03-31"
+     *  },
+     *  "subscription": {
+     *    "plan": "Monthly Access",
+     *    "status": "ACTIVE",
+     *    "started_at": "2026-03-01T20:00:00+03:00",
+     *    "expires_at": "2026-03-31T20:00:00+03:00"
+     *  },
+     *  "pending_subscription": null,
+     *  "vault": {
+     *    "rentedIds": [193, 308],
+     *    "purchasedIds": [1, 59],
+     *    "watchHistory": [
+     *      {
+     *        "id": 1,
+     *        "title": "Zootopia 2",
+     *        "thumbnail": "https://portal.naraboxtv.com/storage/tmdb/posters/tmdb_f158459be819affd8c9f257f75a49f15.jpg",
+     *        "episodeId": null,
+     *        "progressSeconds": 1200,
+     *        "lastWatched": "2026-03-10T20:15:30+03:00"
+     *      }
+     *    ]
+     *  },
+     *  "rentals": [
+     *    {
+     *      "id": 193,
+     *      "media_id": 193,
+     *      "media_type": "MOVIE",
+     *      "title": "Shelter - VJ Junior",
+     *      "thumbnail": "https://portal.naraboxtv.com/storage/tmdb/posters/tmdb_98ca49849b082b96c5424c2dfa69f648.jpg",
+     *      "expires_at": "2026-03-15T20:00:00+03:00",
+     *      "rented_at": "2026-03-14T20:00:00+03:00"
+     *    }
+     *  ],
+     *  "purchases": [
+     *    {
+     *      "id": 59,
+     *      "media_id": 59,
+      *      "media_type": "MOVIE",
+     *      "title": "Five Nights at Freddy's 2",
+     *      "thumbnail": "https://portal.naraboxtv.com/storage/tmdb/posters/tmdb_9c202836afbe63c95f5f4e02196a7701.jpg",
+     *      "purchased_at": "2026-03-01T10:00:00+03:00"
+     *    }
+     *  ],
+     *  "transactions": [
+     *    {
+     *      "id": 701,
+     *      "transaction_ref": "NBX-PWP-ABC123XYZ0-1710240000",
+     *      "type": "SUBSCRIPTION",
+     *      "amount": 8500,
+     *      "status": "SUCCESS",
+     *      "payment_gateway": {
+     *        "id": 7,
+     *        "name": "PawaPay",
+     *        "display_name": "PawaPay Mobile Money"
+     *      },
+     *      "transactionable": null,
+     *      "itemTitle": "Monthly Access Subscription",
+     *      "created_at": "2026-03-01T09:59:00+03:00"
+     *    }
+     *  ]
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
+     */
     public function index(Request $request)
     {
         $user = Auth::user();
@@ -165,12 +270,21 @@ class DashboardController extends Controller
                 ->limit(20)
                 ->get()
                 ->map(function ($history) {
+                    $media = $history->media;
+                    $thumb = $media?->thumbnail ?? '';
+                    if ($thumb !== '' && ! str_starts_with($thumb, 'http://') && ! str_starts_with($thumb, 'https://')) {
+                        $thumb = asset('storage/'.ltrim($thumb, '/'));
+                    }
+
                     return [
                         'id' => $history->media_id,
-                        'title' => $history->media->title ?? 'Unknown',
-                        'thumbnail' => $history->media->thumbnail ?? '',
+                        'media_id' => $history->media_id,
+                        'media_type' => $media?->media_type ?? 'MOVIE',
+                        'title' => $media?->title ?? 'Unknown',
+                        'thumbnail' => $thumb,
                         'episodeId' => $history->episode_id,
                         'progressSeconds' => $history->progress_seconds,
+                        'totalSeconds' => $history->total_seconds,
                         'lastWatched' => $history->last_watched_at->toIso8601String(),
                     ];
                 })->toArray();

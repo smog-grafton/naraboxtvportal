@@ -9,6 +9,9 @@ class EmailTemplate extends Model
     protected $fillable = [
         'name',
         'subject',
+        'preheader',
+        'preview_text',
+        'template_type',
         'body',
         'variables',
         'is_active',
@@ -21,18 +24,26 @@ class EmailTemplate extends Model
 
     public function render(array $data = []): array
     {
-        $subject = $this->subject;
-        $body = $this->body;
+        $payload = [
+            'subject' => $this->subject,
+            'preheader' => $this->preheader,
+            'preview_text' => $this->preview_text,
+            'body' => $this->body,
+        ];
 
         foreach ($data as $key => $value) {
-            $subject = str_replace('{{' . $key . '}}', $value, $subject);
-            $body = str_replace('{{' . $key . '}}', $value, $body);
+            $replacement = is_scalar($value) ? (string) $value : json_encode($value);
+
+            foreach ($payload as $field => $content) {
+                if (! is_string($content)) {
+                    continue;
+                }
+
+                $payload[$field] = str_replace('{{' . $key . '}}', $replacement, $content);
+            }
         }
 
-        return [
-            'subject' => $subject,
-            'body' => $body,
-        ];
+        return $payload;
     }
 
     public static function getByName(string $name): ?self

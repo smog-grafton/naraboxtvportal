@@ -6,8 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\VJ;
 use Illuminate\Http\Request;
 
+/**
+ * @group VJs
+ *
+ * List and fetch VJs (translators/presenters). Filter by featured; order by rating or movies count.
+ */
 class VJController extends Controller
 {
+    /**
+     * List VJs. Query: featured (1), order_by (movies_count), limit.
+     */
     public function index(Request $request)
     {
         $query = VJ::where('is_active', true)
@@ -56,6 +64,7 @@ class VJController extends Controller
                 'bio' => $vj->bio,
                 'translatedCount' => $vj->translated_count,
                 'moviesCount' => $vj->movies_count ?? $vj->movies()->count(),
+                'isVerified' => (bool) ($vj->is_verified ?? false),
             ];
         });
 
@@ -111,6 +120,7 @@ class VJController extends Controller
             'specialty' => $vj->genres->pluck('name')->toArray(),
             'bio' => $vj->bio,
             'translatedCount' => $vj->translated_count,
+            'isVerified' => (bool) ($vj->is_verified ?? false),
             'movies' => $vj->movies->map(function ($movie) use ($getMovieImageUrl) {
                 return [
                     'id' => $movie->id,

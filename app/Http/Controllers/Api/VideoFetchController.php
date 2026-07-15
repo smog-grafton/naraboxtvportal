@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\FetchVideoFromUrlJob;
 use App\Models\VideoSource;
+use App\Services\BunnyStreamClientService;
 use App\Services\CdnMediaClientService;
 use App\Services\CdnUrlDerivationService;
+use App\Services\ContaboObjectStorageService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -16,6 +19,10 @@ class VideoFetchController extends Controller
      */
     public function fetch(Request $request)
     {
+        $request->merge([
+            'url' => $this->normalizeRemoteUrl((string) $request->input('url')),
+        ]);
+
         $request->validate([
             'url' => 'required|url',
             'sourceable_type' => 'required|string|in:App\Models\Movie,App\Models\Episode',
@@ -24,20 +31,51 @@ class VideoFetchController extends Controller
             'format' => 'nullable|string|max:10',
             'import_mode' => 'nullable|string|in:now,queue',
             'import_strategy' => 'nullable|string|in:auto,python_worker',
+            'storage_target' => 'nullable|string|in:cdn,contabo_object_storage',
         ]);
 
-        $url = $this->normalizeRemoteUrl((string) $request->input('url'));
+        $url = (string) $request->input('url');
         $sourceableType = (string) $request->input('sourceable_type');
         $sourceableId = (int) $request->input('sourceable_id');
         $quality = (string) ($request->input('quality') ?? 'auto');
         $format = (string) ($request->input('format') ?? 'auto');
         $importMode = (string) ($request->input('import_mode') ?? (string) config('services.cdn.default_import_mode', 'now'));
         $requestedStrategy = (string) ($request->input('import_strategy') ?? 'auto');
+        $storageTarget = (string) ($request->input('storage_target') ?? 'cdn');
         $importStrategy = $this->resolveImportStrategy($url, $requestedStrategy);
         $assetType = $sourceableType === 'App\Models\Episode' ? 'episode' : 'movie';
 
         try {
             $cdnService = app(CdnMediaClientService::class);
+            $bunnyService = app(BunnyStreamClientService::class);
+
+            if ($bunnyService->isBunnyStreamUrl($url)) {
+                $directSource = $this->upsertDirectBunnyStreamUrlSource(
+                    $url,
+                    $sourceableType,
+                    $sourceableId,
+                    $quality,
+                    $format,
+                    $bunnyService
+                );
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Bunny Stream URL saved directly as playback source.',
+                    'video_source' => [
+                        'id' => $directSource->id,
+                        'file_path' => $directSource->file_path,
+                        'file_size' => $directSource->file_size,
+                        'format' => $directSource->format,
+                        'quality' => $directSource->quality,
+                        'type' => $directSource->type,
+                        'status' => (string) (($directSource->metadata['bunny_stream_status_label'] ?? 'ready')),
+                        'bunny_stream_video_id' => $directSource->metadata['bunny_stream_video_id'] ?? null,
+                    ],
+                    'file_size' => $directSource->file_size,
+                    'file_path' => $directSource->file_path,
+                ]);
+            }
 
             // Manual/direct mode: if user pasted a CDN public URL, store it as a normal URL source.
             if ($this->isCdnManagedUrl($url)) {
@@ -67,6 +105,19 @@ class VideoFetchController extends Controller
                     'file_size' => $directSource->file_size,
                     'file_path' => $directSource->file_path,
                 ]);
+            }
+
+            if ($storageTarget === 'contabo_object_storage') {
+                return $this->fetchToContaboObjectStorage(
+                    $url,
+                    $sourceableType,
+                    $sourceableId,
+                    $assetType,
+                    $quality,
+                    $format,
+                    $importMode,
+                    app(ContaboObjectStorageService::class)
+                );
             }
 
             $existingSource = VideoSource::where('sourceable_type', $sourceableType)
@@ -283,6 +334,24 @@ class VideoFetchController extends Controller
                 $qualities
             );
 
+            try {
+                app(\App\Services\CdnPlaybackReadinessService::class)->syncSources(
+                    VideoSource::where('sourceable_type', $sourceableType)
+                        ->where('sourceable_id', $sourceableId)
+                        ->get(),
+                    false,
+                    true,
+                );
+            } catch (\Throwable $readinessError) {
+                Log::warning('CDN readiness sync failed after video fetch', [
+                    'sourceable_type' => $sourceableType,
+                    'sourceable_id' => $sourceableId,
+                    'cdn_asset_id' => $cdnAssetId,
+                    'cdn_source_id' => $cdnSourceId,
+                    'error' => $readinessError->getMessage(),
+                ]);
+            }
+
             $message = $importMode === 'queue'
                 ? 'Video fetch queued on CDN. Status will update shortly.'
                 : ($cdnStatus === 'ready' ? 'Video fetched and saved successfully on CDN' : 'CDN import started.');
@@ -312,6 +381,211 @@ class VideoFetchController extends Controller
                 'message' => 'Error fetching video: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    private function fetchToContaboObjectStorage(
+        string $url,
+        string $sourceableType,
+        int $sourceableId,
+        string $assetType,
+        string $quality,
+        string $format,
+        string $importMode,
+        ContaboObjectStorageService $contaboService
+    ) {
+        if ($importMode === 'queue' && ! $contaboService->isContaboPublicUrl($url)) {
+            $existingSource = $this->findExistingContaboSource($sourceableType, $sourceableId, $url);
+            $metadata = array_merge((array) ($existingSource?->metadata ?? []), [
+                'provider' => 'contabo_object_storage',
+                'fetch_status' => 'queued',
+                'fetch_mode' => 'queue',
+                'storage_target' => 'contabo_object_storage',
+                'source_url' => $url,
+                'last_message' => 'Contabo Object Storage fetch queued.',
+                'queued_at' => now()->toDateTimeString(),
+                'last_synced_at' => now()->toDateTimeString(),
+            ]);
+
+            if ($existingSource) {
+                $existingSource->update([
+                    'quality' => $quality !== '' ? $quality : ($existingSource->quality ?: 'auto'),
+                    'format' => $format !== '' && $format !== 'auto' ? $format : ($existingSource->format ?: 'mp4'),
+                    'metadata' => $metadata,
+                    'is_active' => (bool) $existingSource->file_path,
+                ]);
+                $videoSource = $existingSource->fresh();
+            } else {
+                $videoSource = VideoSource::create([
+                    'sourceable_type' => $sourceableType,
+                    'sourceable_id' => $sourceableId,
+                    'type' => 'contabo_object_storage',
+                    'url' => $url,
+                    'file_path' => null,
+                    'quality' => $quality !== '' ? $quality : 'auto',
+                    'format' => $format !== '' && $format !== 'auto' ? $format : 'mp4',
+                    'file_size' => null,
+                    'is_primary' => false,
+                    'is_active' => false,
+                    'metadata' => $metadata,
+                ]);
+            }
+
+            FetchVideoFromUrlJob::dispatch(
+                $videoSource->id,
+                $url,
+                $sourceableType,
+                $sourceableId,
+                $quality,
+                $format,
+                'contabo_object_storage'
+            )->onQueue('contabo-imports');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Video fetch queued for Contabo Object Storage.',
+                'video_source' => [
+                    'id' => $videoSource->id,
+                    'file_path' => $videoSource->file_path,
+                    'file_size' => $videoSource->file_size,
+                    'format' => $videoSource->format,
+                    'quality' => $videoSource->quality,
+                    'type' => $videoSource->type,
+                    'status' => 'queued',
+                ],
+                'file_size' => $videoSource->file_size,
+                'file_path' => $videoSource->file_path,
+            ]);
+        }
+
+        $result = $contaboService->fetchUrlToBucket(
+            $url,
+            $sourceableType,
+            $sourceableId,
+            $assetType,
+            $quality,
+            $format
+        );
+
+        if (! ($result['ok'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'message' => (string) ($result['error'] ?? 'Failed to store video on Contabo Object Storage.'),
+            ], 400);
+        }
+
+        $publicUrl = (string) ($result['public_url'] ?? $url);
+        $objectKey = isset($result['key']) ? (string) $result['key'] : $contaboService->objectKeyFromPublicUrl($publicUrl);
+        $fileSize = isset($result['file_size']) ? (int) $result['file_size'] : null;
+        $videoSource = $this->upsertContaboObjectStorageSource(
+            $url,
+            $publicUrl,
+            $objectKey,
+            $sourceableType,
+            $sourceableId,
+            $quality,
+            $format,
+            $fileSize,
+            $importMode,
+            $contaboService
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Video fetched and saved successfully on Contabo Object Storage.',
+            'video_source' => [
+                'id' => $videoSource->id,
+                'file_path' => $videoSource->file_path,
+                'file_size' => $videoSource->file_size,
+                'format' => $videoSource->format,
+                'quality' => $videoSource->quality,
+                'type' => $videoSource->type,
+                'status' => 'completed',
+                'object_key' => $objectKey,
+            ],
+            'file_size' => $videoSource->file_size,
+            'file_path' => $videoSource->file_path,
+        ]);
+    }
+
+    private function upsertContaboObjectStorageSource(
+        string $sourceUrl,
+        string $publicUrl,
+        ?string $objectKey,
+        string $sourceableType,
+        int $sourceableId,
+        string $quality,
+        string $format,
+        ?int $fileSize,
+        string $fetchMode,
+        ContaboObjectStorageService $contaboService
+    ): VideoSource {
+        $existingSource = $this->findExistingContaboSource($sourceableType, $sourceableId, $sourceUrl, $publicUrl);
+        $resolvedFormat = $format !== '' && $format !== 'auto'
+            ? $format
+            : (pathinfo((string) parse_url($publicUrl, PHP_URL_PATH), PATHINFO_EXTENSION) ?: 'mp4');
+
+        $metadata = array_merge((array) ($existingSource?->metadata ?? []), [
+            'provider' => 'contabo_object_storage',
+            'fetch_status' => 'completed',
+            'fetch_mode' => $fetchMode === 'queue' ? 'queue' : 'import_now',
+            'storage_target' => 'contabo_object_storage',
+            'last_message' => 'Video stored on Contabo Object Storage.',
+            'source_url' => $sourceUrl,
+            'object_key' => $objectKey,
+            'bucket' => $contaboService->bucket(),
+            'endpoint' => $contaboService->endpoint(),
+            'public_url' => $publicUrl,
+            'download_url' => $publicUrl,
+            'mp4_url' => $publicUrl,
+            'playback_type' => strtolower($resolvedFormat) === 'm3u8' ? 'hls' : 'mp4',
+            'last_synced_at' => now()->toDateTimeString(),
+        ]);
+
+        $payload = [
+            'type' => 'contabo_object_storage',
+            'url' => $publicUrl,
+            'file_path' => $publicUrl,
+            'quality' => $quality !== '' ? $quality : 'auto',
+            'format' => strtolower($resolvedFormat),
+            'file_size' => $fileSize ?: $existingSource?->file_size,
+            'is_active' => true,
+            'metadata' => $metadata,
+        ];
+
+        if ($existingSource) {
+            $existingSource->update($payload);
+
+            return $existingSource->fresh();
+        }
+
+        return VideoSource::create(array_merge($payload, [
+            'sourceable_type' => $sourceableType,
+            'sourceable_id' => $sourceableId,
+            'is_primary' => false,
+        ]));
+    }
+
+    private function findExistingContaboSource(
+        string $sourceableType,
+        int $sourceableId,
+        string $sourceUrl,
+        ?string $publicUrl = null
+    ): ?VideoSource {
+        return VideoSource::where('sourceable_type', $sourceableType)
+            ->where('sourceable_id', $sourceableId)
+            ->where('type', 'contabo_object_storage')
+            ->where(function ($query) use ($sourceUrl, $publicUrl) {
+                $query->where('url', $sourceUrl)
+                    ->orWhere('file_path', $sourceUrl)
+                    ->orWhere('metadata->source_url', $sourceUrl);
+
+                if ($publicUrl !== null && $publicUrl !== '') {
+                    $query->orWhere('url', $publicUrl)
+                        ->orWhere('file_path', $publicUrl)
+                        ->orWhere('metadata->public_url', $publicUrl);
+                }
+            })
+            ->first();
     }
 
     private function toFetchStatus(string $cdnStatus): string
@@ -361,7 +635,7 @@ class VideoFetchController extends Controller
         }
 
         $path = (string) ($parts['path'] ?? '/');
-        $normalizedPath = preg_replace('#/+#', '/', $path) ?: '/';
+        $normalizedPath = $this->normalizeUrlPath($path);
 
         $rebuilt = $parts['scheme'] . '://' . $parts['host'];
         if (isset($parts['port'])) {
@@ -370,13 +644,38 @@ class VideoFetchController extends Controller
         $rebuilt .= $normalizedPath;
 
         if (isset($parts['query']) && $parts['query'] !== '') {
-            $rebuilt .= '?' . $parts['query'];
+            $rebuilt .= '?' . $this->normalizeUrlQueryOrFragment((string) $parts['query']);
         }
         if (isset($parts['fragment']) && $parts['fragment'] !== '') {
-            $rebuilt .= '#' . $parts['fragment'];
+            $rebuilt .= '#' . $this->normalizeUrlQueryOrFragment((string) $parts['fragment']);
         }
 
         return $rebuilt;
+    }
+
+    private function normalizeUrlPath(string $path): string
+    {
+        $normalized = preg_replace('#/+#', '/', $path) ?: '/';
+        $segments = explode('/', $normalized);
+
+        $encodedSegments = array_map(static function (string $segment): string {
+            if ($segment === '') {
+                return '';
+            }
+
+            return rawurlencode(rawurldecode($segment));
+        }, $segments);
+
+        $rebuilt = implode('/', $encodedSegments);
+
+        return str_starts_with($rebuilt, '/') ? $rebuilt : '/' . $rebuilt;
+    }
+
+    private function normalizeUrlQueryOrFragment(string $value): string
+    {
+        $clean = preg_replace('/[\x00-\x1F\x7F]+/', '', $value) ?: '';
+
+        return str_replace(' ', '%20', $clean);
     }
 
     private function resolveImportStrategy(string $url, string $requested): string
@@ -398,6 +697,93 @@ class VideoFetchController extends Controller
         )));
 
         return in_array($host, $hosts, true) ? 'python_worker' : 'auto';
+    }
+
+    private function upsertDirectBunnyStreamUrlSource(
+        string $url,
+        string $sourceableType,
+        int $sourceableId,
+        string $quality,
+        string $format,
+        BunnyStreamClientService $bunnyService
+    ): VideoSource {
+        $videoId = (string) ($bunnyService->extractVideoId($url) ?? '');
+        $videoData = null;
+        $playback = null;
+
+        if ($videoId !== '' && $bunnyService->isConfigured()) {
+            try {
+                $videoResponse = $bunnyService->getVideo($videoId);
+                if (($videoResponse['ok'] ?? false) && is_array($videoResponse['data'] ?? null)) {
+                    $videoData = (array) $videoResponse['data'];
+                    $playback = $bunnyService->buildPlaybackPayload($videoId, $videoData);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Bunny Stream metadata lookup failed for direct URL source', [
+                    'bunny_stream_video_id' => $videoId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($playback === null && $videoId !== '' && $bunnyService->isConfigured()) {
+            $playback = $bunnyService->buildPlaybackPayload($videoId, $videoData);
+        }
+
+        $hlsUrl = (string) (($playback['hls_master_url'] ?? null) ?: (str_ends_with(strtolower((string) parse_url($url, PHP_URL_PATH)), '.m3u8') ? $url : ''));
+        $mp4Url = (string) (($playback['mp4_play_url'] ?? null) ?: (str_ends_with(strtolower((string) parse_url($url, PHP_URL_PATH)), '.mp4') ? $url : ''));
+        $playbackUrl = $hlsUrl ?: $mp4Url ?: $url;
+
+        $metadata = [
+            'provider' => 'bunny_stream',
+            'fetch_status' => 'completed',
+            'fetch_mode' => 'direct_url',
+            'last_message' => 'Direct Bunny Stream URL saved without re-fetch.',
+            'bunny_stream_video_id' => $videoId !== '' ? $videoId : null,
+            'bunny_stream_library_id' => config('services.bunny_stream.library_id'),
+            'bunny_stream_status' => $playback['status'] ?? null,
+            'bunny_stream_status_label' => $playback['status_label'] ?? 'ready',
+            'bunny_stream_encode_progress' => $playback['encode_progress'] ?? null,
+            'bunny_stream_playback' => $playback,
+            'bunny_stream_video' => $videoData,
+            'playback_type' => $hlsUrl !== '' ? 'hls' : 'mp4',
+            'hls_master_url' => $hlsUrl !== '' ? $hlsUrl : null,
+            'mp4_play_url' => $mp4Url !== '' ? $mp4Url : null,
+            'mp4_url' => $mp4Url !== '' ? $mp4Url : null,
+            'download_url' => $mp4Url !== '' ? $mp4Url : null,
+            'last_synced_at' => now()->toDateTimeString(),
+        ];
+
+        $existingSource = VideoSource::where('sourceable_type', $sourceableType)
+            ->where('sourceable_id', $sourceableId)
+            ->where('url', $playbackUrl)
+            ->whereIn('type', ['url', 'fetched', 'bunny_stream'])
+            ->first();
+
+        $payload = [
+            'type' => 'bunny_stream',
+            'url' => $playbackUrl,
+            'file_path' => $playbackUrl,
+            'quality' => $quality !== '' && $quality !== 'auto' ? $quality : 'auto',
+            'format' => $format !== '' && $format !== 'auto' ? $format : ($hlsUrl !== '' ? 'm3u8' : 'mp4'),
+            'is_active' => true,
+            'metadata' => $metadata,
+        ];
+
+        if ($existingSource) {
+            $existingSource->update(array_merge($payload, [
+                'metadata' => array_merge((array) ($existingSource->metadata ?? []), $metadata),
+            ]));
+
+            return $existingSource->fresh();
+        }
+
+        return VideoSource::create(array_merge($payload, [
+            'sourceable_type' => $sourceableType,
+            'sourceable_id' => $sourceableId,
+            'file_size' => null,
+            'is_primary' => false,
+        ]));
     }
 
     private function upsertDirectCdnUrlSource(
@@ -580,14 +966,18 @@ class VideoFetchController extends Controller
                     'file_size' => $defaults['file_size'] ?? null,
                     'duration_seconds' => $defaults['duration_seconds'] ?? null,
                     'is_primary' => $defaults['is_primary'] ?? false,
-                    'is_active' => $defaults['is_active'] ?? true,
-                    'metadata' => array_merge($baseMeta, ['source_role' => 'hls_master']),
+                    'is_active' => false,
+                    'metadata' => array_merge($baseMeta, ['source_role' => 'hls_master', 'cdn_ready' => false, 'cdn_hls_ready' => false]),
                 ]);
             } else {
+                $existingMetadata = (array) ($existing->metadata ?? []);
+                $isReady = (bool) ($existingMetadata['cdn_ready'] ?? $existingMetadata['cdn_hls_ready'] ?? false);
                 $existing->update([
                     'file_path' => $hlsMasterUrl,
                     'url' => $hlsMasterUrl,
-                    'metadata' => array_merge((array) ($existing->metadata ?? []), $baseMeta, ['source_role' => 'hls_master']),
+                    'is_active' => $isReady,
+                    'is_primary' => $isReady ? $existing->is_primary : false,
+                    'metadata' => array_merge($existingMetadata, $baseMeta, ['source_role' => 'hls_master', 'cdn_ready' => $isReady, 'cdn_hls_ready' => $isReady]),
                 ]);
             }
         }

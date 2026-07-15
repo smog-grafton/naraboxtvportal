@@ -7,10 +7,15 @@ use App\Models\ContactMessage;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
+/**
+ * @group Contact
+ *
+ * Submit contact form (name, email, subject, message). No auth.
+ */
 class ContactController extends Controller
 {
     /**
-     * Submit contact form
+     * Submit contact form. Body: name, email, subject, message.
      */
     public function store(Request $request)
     {

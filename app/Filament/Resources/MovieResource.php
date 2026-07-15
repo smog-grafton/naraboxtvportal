@@ -6,6 +6,7 @@ use App\Filament\Resources\MovieResource\Pages;
 use App\Models\Movie;
 use App\Models\Category;
 use App\Models\VJ;
+use App\Models\MediaLibrary;
 use App\Models\Genre;
 use App\Models\Actor;
 use Filament\Forms;
@@ -144,6 +145,12 @@ class MovieResource extends Resource
                             ->label('VJ (Translator)')
                             ->relationship('vj', 'name')
                             ->searchable(),
+                        Forms\Components\Select::make('media_library_id')
+                            ->label('Media Library / Studio')
+                            ->relationship('mediaLibrary', 'name')
+                            ->searchable()
+                            ->nullable()
+                            ->helperText('Assign this movie to a Media Library creator.'),
                         Forms\Components\Select::make('genres')
                             ->multiple()
                             ->relationship('genres', 'name')
@@ -269,6 +276,70 @@ class MovieResource extends Resource
                             ->helperText('Allow users to download this movie'),
                     ]),
 
+                Forms\Components\Section::make('Compliance / Visibility')
+                    ->schema([
+                        Forms\Components\Select::make('content_status')
+                            ->label('Content Status')
+                            ->options([
+                                'draft' => 'Draft',
+                                'processing' => 'Processing',
+                                'published' => 'Published',
+                                'unlisted' => 'Unlisted',
+                                'suspended' => 'Suspended',
+                                'dmca_removed' => 'DMCA Removed',
+                            ])
+                            ->default('published')
+                            ->helperText('DMCA Removed disables playback and downloads while keeping the page visible with a notice.'),
+                    ]),
+
+                Forms\Components\Section::make('Push Notification on Save')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_push_on_save')
+                            ->label('Send push notification after save')
+                            ->default(false),
+                        Forms\Components\TextInput::make('push_title')
+                            ->label('Notification title')
+                            ->maxLength(255)
+                            ->helperText('Defaults to movie title if left empty.'),
+                        Forms\Components\TextInput::make('push_body')
+                            ->label('Notification body')
+                            ->maxLength(255)
+                            ->helperText('Short message to show in the notification.'),
+                        Forms\Components\TextInput::make('push_image_url')
+                            ->label('Notification image URL')
+                            ->url()
+                            ->maxLength(1024)
+                            ->helperText('Optional image to show in the notification.'),
+                        Forms\Components\Select::make('push_target_platform')
+                            ->label('Target platform')
+                            ->options([
+                                'all' => 'All platforms',
+                                'android' => 'Android',
+                                'ios' => 'iOS',
+                                'web' => 'Web',
+                            ])
+                            ->default('all'),
+                    ])->columns(2),
+                Forms\Components\Section::make('Email & Inbox Notification on Save')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_email_on_save')
+                            ->label('Send email campaign after save')
+                            ->default(false),
+                        Forms\Components\Select::make('email_audience_type')
+                            ->options([
+                                'selected_users' => 'All registered users',
+                                'active_subscribers' => 'Active subscribers',
+                                'inactive_watchers' => 'Inactive watchers',
+                            ])
+                            ->default('selected_users'),
+                        Forms\Components\Toggle::make('email_marketing_only')
+                            ->label('Only users opted into marketing')
+                            ->default(true),
+                        Forms\Components\TextInput::make('email_subject_override')
+                            ->maxLength(255)
+                            ->helperText('Optional campaign title override.'),
+                    ])->columns(2),
+
                 Forms\Components\Toggle::make('is_active')
                     ->label('Active')
                     ->default(true),
@@ -301,6 +372,10 @@ class MovieResource extends Resource
                 Tables\Columns\IconColumn::make('is_active')
                     ->label('Active')
                     ->boolean(),
+                Tables\Columns\TextColumn::make('content_status')
+                    ->label('Status')
+                    ->badge()
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
@@ -310,6 +385,28 @@ class MovieResource extends Resource
                 Tables\Filters\SelectFilter::make('category_id')
                     ->label('Category')
                     ->relationship('category', 'name'),
+                Tables\Filters\SelectFilter::make('media_library_id')
+                    ->label('Media Library')
+                    ->relationship('mediaLibrary', 'name')
+                    ->searchable(),
+                Tables\Filters\SelectFilter::make('publish_status')
+                    ->label('Publish Status')
+                    ->options([
+                        'draft' => 'Draft',
+                        'pending_review' => 'Pending Review',
+                        'published' => 'Published',
+                        'rejected' => 'Rejected',
+                    ]),
+                Tables\Filters\SelectFilter::make('content_status')
+                    ->label('Content Status')
+                    ->options([
+                        'draft' => 'Draft',
+                        'processing' => 'Processing',
+                        'published' => 'Published',
+                        'unlisted' => 'Unlisted',
+                        'suspended' => 'Suspended',
+                        'dmca_removed' => 'DMCA Removed',
+                    ]),
                 Tables\Filters\TernaryFilter::make('is_free')
                     ->label('Free Access'),
                 Tables\Filters\TernaryFilter::make('is_premium')
@@ -319,9 +416,37 @@ class MovieResource extends Resource
                 Tables\Filters\TernaryFilter::make('is_active')
                     ->label('Active'),
             ])
+            ->recordUrl(fn (Movie $record) => static::getUrl('view', ['record' => $record]))
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('mark_dmca_removed')
+                    ->label('Mark DMCA Removed')
+                    ->icon('heroicon-o-shield-exclamation')
+                    ->requiresConfirmation()
+                    ->color('danger')
+                    ->action(function (Movie $record) {
+                        $record->update(['content_status' => 'dmca_removed']);
+                        Notification::make()
+                            ->title('Content restricted')
+                            ->body('Movie marked as DMCA Removed. Playback and downloads are now blocked.')
+                            ->success()
+                            ->send();
+                    }),
+                Tables\Actions\Action::make('restore_content')
+                    ->label('Restore')
+                    ->icon('heroicon-o-arrow-uturn-left')
+                    ->requiresConfirmation()
+                    ->color('success')
+                    ->visible(fn (Movie $record) => ($record->content_status ?? 'published') === 'dmca_removed')
+                    ->action(function (Movie $record) {
+                        $record->update(['content_status' => 'published']);
+                        Notification::make()
+                            ->title('Content restored')
+                            ->body('Movie restored to Published.')
+                            ->success()
+                            ->send();
+                    }),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

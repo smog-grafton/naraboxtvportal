@@ -57,12 +57,12 @@ class VideoSource extends Model
 
     /**
      * Sync this video source to a download source
-     * Only syncs url, fetched, and local types (not youtube/vimeo)
+     * Only syncs downloadable source types (not youtube/vimeo)
      */
     public function syncToDownloadSource()
     {
         // Only sync downloadable types
-        if (!in_array($this->type, ['url', 'fetched', 'local'])) {
+        if (! $this->isDownloadableSourceType()) {
             return;
         }
 
@@ -77,15 +77,21 @@ class VideoSource extends Model
         $downloadableType = $this->sourceable_type;
         $downloadableId = $this->sourceable_id;
 
+        $downloadUrl = $this->downloadableUrl();
+
         // Check if download source already exists for this video source
         // Use a unique identifier based on video source ID
-        $existingDownloadSource = DownloadSource::where('downloadable_type', $downloadableType)
+        $existingDownloadQuery = DownloadSource::where('downloadable_type', $downloadableType)
             ->where('downloadable_id', $downloadableId)
-            ->where('type', $this->type)
-            ->where(function($query) {
+            ->where('type', $this->type);
+
+        if ($this->type === 'bunny_stream') {
+            $existingDownloadSource = $existingDownloadQuery->first();
+        } else {
+            $existingDownloadSource = $existingDownloadQuery->where(function($query) use ($downloadUrl) {
                 // Match by URL for url/fetched types, or file_path for local/fetched
-                if ($this->type === 'url' && $this->url) {
-                    $query->where('url', $this->url);
+                if ($this->usesDownloadUrlColumn() && $downloadUrl) {
+                    $query->where('url', $downloadUrl);
                 } elseif (in_array($this->type, ['fetched', 'local']) && $this->file_path) {
                     $query->where('file_path', $this->file_path);
                 } else {
@@ -95,6 +101,7 @@ class VideoSource extends Model
                 }
             })
             ->first();
+        }
 
         // Determine quality and format
         $quality = $this->quality;
@@ -122,16 +129,23 @@ class VideoSource extends Model
             }
         }
 
+        $downloadFormat = $this->downloadableFormat($downloadUrl, $format);
+
+        if (! $downloadUrl || $this->isHlsDownloadCandidate($downloadUrl, $downloadFormat)) {
+            $this->deleteDownloadSource();
+            return;
+        }
+
         $downloadData = [
             'downloadable_type' => $downloadableType,
             'downloadable_id' => $downloadableId,
             'type' => $this->type,
-            'url' => $this->type === 'url' ? $this->url : null,
-            'file_path' => in_array($this->type, ['fetched', 'local']) ? $this->file_path : null,
+            'url' => $this->usesDownloadUrlColumn() || ! $this->file_path ? $downloadUrl : null,
+            'file_path' => in_array($this->type, ['fetched', 'local'], true) && $this->file_path ? $this->file_path : null,
             'quality' => $quality,
-            'format' => $format,
+            'format' => $downloadFormat,
             'file_size' => $this->file_size,
-            'label' => $quality . ' ' . strtoupper($format),
+            'label' => $quality . ' ' . strtoupper($downloadFormat),
             'is_active' => $this->is_active,
         ];
 
@@ -156,8 +170,10 @@ class VideoSource extends Model
             ->where('downloadable_id', $downloadableId)
             ->where('type', $this->type)
             ->where(function($query) {
-                if ($this->type === 'url' && $this->url) {
-                    $query->where('url', $this->url);
+                if ($this->type === 'bunny_stream') {
+                    $query->where('type', 'bunny_stream');
+                } elseif ($this->usesDownloadUrlColumn() && $this->downloadableUrl()) {
+                    $query->where('url', $this->downloadableUrl());
                 } elseif (in_array($this->type, ['fetched', 'local']) && $this->file_path) {
                     $query->where('file_path', $this->file_path);
                 }
@@ -172,18 +188,176 @@ class VideoSource extends Model
 
     public function getFullUrlAttribute(): ?string
     {
+        if ($url = $this->metadataBackedUrl(includeHls: true)) {
+            return $url;
+        }
+
+        if (in_array($this->type, ['contabo_object_storage', 'tele_ob'], true)) {
+            return $this->downloadableUrl();
+        }
+
         if ($this->type === 'local' || $this->type === 'fetched') {
-            if (! $this->file_path) {
-                return null;
+            $path = $this->file_path ?: $this->url;
+            if (! $path) {
+                return $this->url ?: null;
             }
 
-            if (str_starts_with($this->file_path, 'http://') || str_starts_with($this->file_path, 'https://')) {
-                return $this->file_path;
+            if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+                return $path;
             }
 
-            return asset('storage/' . ltrim($this->file_path, '/'));
+            return asset('storage/' . ltrim($path, '/'));
         }
         
-        return $this->url;
+        return $this->url ?: $this->file_path;
+    }
+
+    private function downloadableUrl(): ?string
+    {
+        if ($url = $this->metadataBackedUrl(includeHls: false)) {
+            return $url;
+        }
+
+        if (in_array($this->type, ['contabo_object_storage', 'tele_ob'], true)) {
+            $metadata = is_array($this->metadata) ? $this->metadata : [];
+
+            foreach ([
+                $metadata['public_url'] ?? null,
+                $metadata['download_url'] ?? null,
+                $metadata['mp4_url'] ?? null,
+                $this->url,
+                $this->file_path,
+            ] as $url) {
+                if (is_string($url) && trim($url) !== '') {
+                    return trim($url);
+                }
+            }
+
+            return null;
+        }
+
+        if ($this->type !== 'bunny_stream') {
+            return $this->url ?: $this->file_path;
+        }
+
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+        $playback = is_array($metadata['bunny_stream_playback'] ?? null) ? $metadata['bunny_stream_playback'] : [];
+
+        foreach ([
+            $playback['download_url'] ?? null,
+            $metadata['download_url'] ?? null,
+            $playback['original_url'] ?? null,
+            $metadata['original_url'] ?? null,
+            $playback['mp4_url'] ?? null,
+            $metadata['mp4_url'] ?? null,
+            $playback['mp4_play_url'] ?? null,
+            $metadata['mp4_play_url'] ?? null,
+            $metadata['source_url'] ?? null,
+        ] as $url) {
+            if (is_string($url) && trim($url) !== '') {
+                return trim($url);
+            }
+        }
+
+        return null;
+    }
+
+    private function metadataBackedUrl(bool $includeHls): ?string
+    {
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+
+        $candidates = [
+            $metadata['mp4_play_url'] ?? null,
+            $metadata['mp4_url'] ?? null,
+            $metadata['download_mp4_url'] ?? null,
+            $metadata['download_url'] ?? null,
+            $metadata['original_url'] ?? null,
+            $metadata['public_url'] ?? null,
+            $metadata['source_url'] ?? null,
+        ];
+
+        if ($includeHls) {
+            $candidates[] = $metadata['hls_master_url'] ?? null;
+            $candidates[] = $metadata['hls_url'] ?? null;
+        }
+
+        foreach ($candidates as $url) {
+            if (! is_string($url) || trim($url) === '') {
+                continue;
+            }
+
+            $url = trim($url);
+            if (! $includeHls && $this->isHlsDownloadCandidate($url, null)) {
+                continue;
+            }
+
+            return $url;
+        }
+
+        return null;
+    }
+
+    private function isDownloadableSourceType(): bool
+    {
+        return in_array($this->type, [
+            'url',
+            'direct',
+            'upload',
+            'uploaded',
+            'local',
+            'fetched',
+            'curl',
+            'cdn',
+            'legacy_cdn',
+            'contabo',
+            'contabo_object_storage',
+            'tele_ob',
+            'bunny_stream',
+            'nbx-engine',
+        ], true);
+    }
+
+    private function usesDownloadUrlColumn(): bool
+    {
+        return in_array($this->type, [
+            'url',
+            'direct',
+            'upload',
+            'uploaded',
+            'cdn',
+            'legacy_cdn',
+            'contabo',
+            'contabo_object_storage',
+            'tele_ob',
+            'bunny_stream',
+            'nbx-engine',
+        ], true);
+    }
+
+    private function downloadableFormat(?string $downloadUrl, ?string $fallback): string
+    {
+        if (in_array($this->type, ['bunny_stream', 'nbx-engine'], true)) {
+            return 'mp4';
+        }
+
+        if ($fallback && $fallback !== 'auto') {
+            return $fallback;
+        }
+
+        $path = is_string($downloadUrl) ? parse_url($downloadUrl, PHP_URL_PATH) : null;
+        $extension = is_string($path) ? pathinfo($path, PATHINFO_EXTENSION) : '';
+
+        return $extension !== '' ? strtolower($extension) : 'mp4';
+    }
+
+    private function isHlsDownloadCandidate(?string $url, ?string $format): bool
+    {
+        if (strtolower((string) $format) === 'm3u8') {
+            return true;
+        }
+
+        $path = is_string($url) ? strtolower((string) parse_url($url, PHP_URL_PATH)) : '';
+
+        return str_ends_with($path, '.m3u8');
     }
 }

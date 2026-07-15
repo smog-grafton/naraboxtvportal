@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\VideoSource;
+use App\Services\CdnPlaybackReadinessService;
 use App\Services\VideoSourceDerivationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,6 +35,13 @@ class WorkerSyncController extends Controller
                 ->get();
             foreach ($sources as $videoSource) {
                 app(VideoSourceDerivationService::class)->ensureDerivedSourcesForCdnUrl($videoSource);
+                if ($videoSource->sourceable) {
+                    app(CdnPlaybackReadinessService::class)->syncForSourceable(
+                        $videoSource->sourceable,
+                        (bool) ($validated['playback_ready'] ?? false),
+                        true
+                    );
+                }
                 $refreshed++;
             }
         }

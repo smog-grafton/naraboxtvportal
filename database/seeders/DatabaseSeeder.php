@@ -29,7 +29,9 @@ class DatabaseSeeder extends Seeder
             SubscriptionPlanSeeder::class,
             SmtpSettingSeeder::class,
             EmailTemplateSeeder::class,
+            AdminAlertSettingSeeder::class,
             HeroSlideSeeder::class,
+            CmsPageSeeder::class,
         ]);
 
         // Create a test admin user

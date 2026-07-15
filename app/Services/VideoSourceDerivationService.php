@@ -80,18 +80,23 @@ class VideoSourceDerivationService
             ->first();
 
         if ($existing) {
+            $isHlsMaster = ($metadata['source_role'] ?? null) === 'hls_master';
+            $existingMetadata = (array) ($existing->metadata ?? []);
             $existing->update([
                 'file_path' => $url,
                 'url' => $url,
                 'quality' => $quality,
                 'format' => $format,
-                'metadata' => array_merge((array) ($existing->metadata ?? []), $metadata),
+                'is_active' => $isHlsMaster ? (bool) ($existingMetadata['cdn_ready'] ?? $existingMetadata['cdn_hls_ready'] ?? false) : $existing->is_active,
+                'is_primary' => $isHlsMaster && ! (bool) ($existingMetadata['cdn_ready'] ?? $existingMetadata['cdn_hls_ready'] ?? false) ? false : $existing->is_primary,
+                'metadata' => array_merge($existingMetadata, ['cdn_ready' => $existingMetadata['cdn_ready'] ?? false], $metadata),
             ]);
 
             return;
         }
 
         $defaults = config('video_sources.defaults', []);
+        $isHlsMaster = ($metadata['source_role'] ?? null) === 'hls_master';
 
         VideoSource::create([
             'sourceable_type' => $sourceableType,
@@ -104,8 +109,8 @@ class VideoSourceDerivationService
             'file_size' => $defaults['file_size'] ?? null,
             'duration_seconds' => $defaults['duration_seconds'] ?? null,
             'is_primary' => $defaults['is_primary'] ?? false,
-            'is_active' => $defaults['is_active'] ?? true,
-            'metadata' => $metadata,
+            'is_active' => $isHlsMaster ? false : ($defaults['is_active'] ?? true),
+            'metadata' => array_merge(['cdn_ready' => ! $isHlsMaster], $metadata),
         ]);
     }
 }

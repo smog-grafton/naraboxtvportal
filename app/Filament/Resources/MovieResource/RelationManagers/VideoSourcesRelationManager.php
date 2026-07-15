@@ -2,19 +2,28 @@
 
 namespace App\Filament\Resources\MovieResource\RelationManagers;
 
+use App\Filament\Resources\Concerns\ManagesContaboVideoSources;
+use App\Filament\Resources\Concerns\ManagesTeleObVideoSources;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
 use Filament\Tables\Table;
 use App\Models\VideoSource;
+use App\Services\BunnyStreamClientService;
 use App\Services\CdnMediaClientService;
+use App\Services\CdnPlaybackReadinessService;
 use App\Services\CdnUrlDerivationService;
+use App\Services\ContaboObjectStorageService;
+use App\Services\NbxVideoSourceService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Storage;
 
 class VideoSourcesRelationManager extends RelationManager
 {
+    use ManagesContaboVideoSources;
+    use ManagesTeleObVideoSources;
+
     protected static string $relationship = 'videoSources';
 
     public function form(Form $form): Form
@@ -28,6 +37,10 @@ class VideoSourcesRelationManager extends RelationManager
                         'youtube' => 'YouTube',
                         'vimeo' => 'Vimeo',
                         'fetched' => 'Fetched (cURL)',
+                        'bunny_stream' => 'Bunny Stream',
+                        'contabo_object_storage' => 'Contabo Object Storage',
+                        'nbx-engine' => 'NBX Engine',
+                        'tele_ob' => 'Tele-OB (Telegram to Contabo)',
                     ])
                     ->required()
                     ->live()
@@ -35,10 +48,18 @@ class VideoSourcesRelationManager extends RelationManager
                 Forms\Components\TextInput::make('url')
                     ->label('Video URL')
                     ->url()
-                    ->maxLength(255)
-                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched']))
-                    ->required(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched']))
-                    ->helperText(fn (Forms\Get $get) => $get('type') === 'fetched' ? 'Enter the video URL to fetch and download' : 'Enter the video URL'),
+                    ->maxLength(2048)
+                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'bunny_stream', 'contabo_object_storage', 'nbx-engine', 'tele_ob']))
+                    ->required(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'tele_ob'], true)
+                        || ($get('type') === 'nbx-engine' && empty($get('file_path'))))
+                    ->helperText(fn (Forms\Get $get) => match ($get('type')) {
+                        'fetched' => 'Enter the video URL to fetch and download',
+                        'bunny_stream' => 'Paste an existing Bunny Stream URL, or leave this empty and upload a file below.',
+                        'contabo_object_storage' => 'Paste a remote video URL to fetch into Contabo, a Contabo public URL, or leave empty and upload below.',
+                        'nbx-engine' => 'Paste a remote video URL, or leave empty and upload below. NBX Engine will process it on the CDN VPS.',
+                        'tele_ob' => 'Paste a Telegram message URL. Telebot downloads it, then Portal streams it into Contabo Object Storage.',
+                        default => 'Enter the video URL',
+                    }),
                 Forms\Components\Hidden::make('imported_source_id')
                     ->dehydrated(true),
                 Forms\Components\Section::make('Fetch Video')
@@ -51,7 +72,7 @@ class VideoSourcesRelationManager extends RelationManager
                                 ->color('info')
                                 ->size('lg')
                                 ->action(function (Forms\Set $set, Forms\Get $get) {
-                                    $fetchUrl = $get('url');
+                                    $fetchUrl = trim((string) ($get('url') ?? ''));
                                     
                                     if (empty($fetchUrl)) {
                                         Notification::make()
@@ -78,11 +99,17 @@ class VideoSourcesRelationManager extends RelationManager
                                         $sourceableId = $ownerRecord->id;
                                         $quality = (string) ($get('quality') ?? config('video_sources.defaults.quality', '480p')) ?: '480p';
                                         $format = (string) ($get('format') ?? config('video_sources.defaults.format', 'mp4')) ?: 'mp4';
+                                        $sourceType = (string) ($get('type') ?? 'fetched');
+                                        if ($sourceType === 'nbx-engine') {
+                                            $this->submitNbxFetchFromForm($set, $get, 'movie');
+                                            return;
+                                        }
+                                        $storageTarget = $sourceType === 'contabo_object_storage' ? 'contabo_object_storage' : 'cdn';
 
                                         $existingSource = VideoSource::where('sourceable_type', $sourceableType)
                                             ->where('sourceable_id', $sourceableId)
                                             ->where('url', $fetchUrl)
-                                            ->where('type', 'fetched')
+                                            ->where('type', $sourceType)
                                             ->first();
 
                                         if ($existingSource) {
@@ -113,6 +140,7 @@ class VideoSourcesRelationManager extends RelationManager
                                             'quality' => $quality,
                                             'format' => $format,
                                             'import_mode' => 'now',
+                                            'storage_target' => $storageTarget,
                                         ]);
                                         
                                         $response = $fetchController->fetch($request);
@@ -144,13 +172,13 @@ class VideoSourcesRelationManager extends RelationManager
                                             $qualityOptions = ['480p', '720p', '1080p', '4K', 'Play 480p', 'hls 480p'];
                                             $set('format', in_array($fmt, $formatOptions, true) ? $fmt : 'mp4');
                                             $set('quality', in_array($qual, $qualityOptions, true) ? $qual : '480p');
-                                            $set('type', 'fetched');
+                                            $set('type', $sourceType);
                                             $set('imported_source_id', $videoSource['id'] ?? null);
                                             
                                             Notification::make()
                                                 ->success()
                                                 ->title('Video Fetched Successfully')
-                                                ->body('Video has been downloaded and saved to the database. File size: ' . $this->formatBytes(isset($videoSource['file_size']) ? (int) $videoSource['file_size'] : null))
+                                                ->body(($storageTarget === 'contabo_object_storage' ? 'Video has been saved to Contabo Object Storage. File size: ' : 'Video has been downloaded and saved to the database. File size: ') . $this->formatBytes(isset($videoSource['file_size']) ? (int) $videoSource['file_size'] : null))
                                                 ->send();
                                         } else {
                                             if ($existingSource) {
@@ -223,6 +251,12 @@ class VideoSourcesRelationManager extends RelationManager
                                     $sourceableId = $ownerRecord->id;
                                     $quality = (string) ($get('quality') ?? config('video_sources.defaults.quality', '480p')) ?: '480p';
                                     $format = (string) ($get('format') ?? config('video_sources.defaults.format', 'mp4')) ?: 'mp4';
+                                    $sourceType = (string) ($get('type') ?? 'fetched');
+                                    if ($sourceType === 'nbx-engine') {
+                                        $this->submitNbxFetchFromForm($set, $get, 'movie');
+                                        return;
+                                    }
+                                    $storageTarget = $sourceType === 'contabo_object_storage' ? 'contabo_object_storage' : 'cdn';
 
                                     $fetchController = app(\App\Http\Controllers\Api\VideoFetchController::class);
                                     $request = new \Illuminate\Http\Request([
@@ -232,6 +266,7 @@ class VideoSourcesRelationManager extends RelationManager
                                         'quality' => $quality,
                                         'format' => $format,
                                         'import_mode' => 'queue',
+                                        'storage_target' => $storageTarget,
                                     ]);
 
                                     $response = $fetchController->fetch($request);
@@ -256,7 +291,7 @@ class VideoSourcesRelationManager extends RelationManager
                                 }),
                         ]),
                     ])
-                    ->visible(fn (Forms\Get $get) => $get('type') === 'fetched')
+                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['fetched', 'contabo_object_storage', 'nbx-engine'], true))
                     ->collapsible()
                     ->collapsed(false),
                 Forms\Components\FileUpload::make('file_path')
@@ -264,18 +299,25 @@ class VideoSourcesRelationManager extends RelationManager
                     ->disk('public')
                     ->directory('videos')
                     ->acceptedFileTypes(['video/mp4', 'video/mkv', 'video/webm', 'video/avi'])
-                    ->maxSize(51200) // 50GB
-                    ->visible(fn (Forms\Get $get) => $get('type') === 'local')
+                    ->maxSize(52_428_800) // 50GB
+                    ->visible(function (Forms\Get $get): bool {
+                        $type = $get('type');
+                        $path = $this->normalizeContaboUploadState($get('file_path') ?? '');
+
+                        return in_array($type, ['local', 'bunny_stream'], true)
+                            || (in_array($type, ['contabo_object_storage', 'nbx-engine'], true) && ! str_starts_with($path, 'http'));
+                    })
                     ->required(fn (Forms\Get $get) => $get('type') === 'local'),
                 Forms\Components\TextInput::make('file_path')
-                    ->label('File Path (Auto-filled after fetch)')
+                    ->label('Stored File URL')
                     ->disabled()
-                    ->visible(fn (Forms\Get $get) => $get('type') === 'fetched' && !empty($get('file_path')))
-                    ->helperText('This will be automatically filled after fetching the video'),
+                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['fetched', 'contabo_object_storage'], true) && $this->normalizeContaboUploadState($get('file_path') ?? '') !== '' && str_starts_with($this->normalizeContaboUploadState($get('file_path') ?? ''), 'http'))
+                    ->helperText('This will be automatically filled after fetching or uploading the video'),
                 Forms\Components\Select::make('quality')
                     ->label('Quality')
                     ->options([
                         '480p' => '480p',
+                        'auto' => 'Auto',
                         '720p' => '720p',
                         '1080p' => '1080p',
                         '4K' => '4K',
@@ -294,6 +336,29 @@ class VideoSourcesRelationManager extends RelationManager
                     ])
                     ->default('mp4')
                     ->required(),
+                Forms\Components\Section::make('NBX Engine Options')
+                    ->schema([
+                        Forms\Components\Select::make('nbx_storage_target')
+                            ->label('Storage Target')
+                            ->options([
+                                'contabo' => 'Contabo Object Storage',
+                                'public' => 'Local/Public Disk',
+                            ])
+                            ->default('contabo'),
+                        Forms\Components\Toggle::make('nbx_faststart')->label('Faststart MP4')->default(true),
+                        Forms\Components\Toggle::make('nbx_compress_enabled')->label('Compress before optimization')->default(false),
+                        Forms\Components\Toggle::make('nbx_hls_480p')->label('Generate HLS 480p')->default(true),
+                        Forms\Components\Toggle::make('nbx_hls_720p')->label('Generate HLS 720p')->default(false),
+                        Forms\Components\Toggle::make('nbx_hls_1080p')
+                            ->label('Request HLS 1080p')
+                            ->helperText('NBX skips 1080p unless enabled in CDN config and the source is capable.')
+                            ->default(false),
+                        Forms\Components\Toggle::make('nbx_allow_downloads')->label('Allow MP4 downloads')->default(true),
+                        Forms\Components\Toggle::make('nbx_allow_hls_streaming')->label('Allow HLS streaming')->default(true),
+                    ])
+                    ->columns(2)
+                    ->visible(fn (Forms\Get $get): bool => $get('type') === 'nbx-engine')
+                    ->collapsible(),
                 Forms\Components\TextInput::make('file_size')
                     ->label('File Size (bytes)')
                     ->numeric()
@@ -323,6 +388,10 @@ class VideoSourcesRelationManager extends RelationManager
                     ->color(fn (string $state): string => match ($state) {
                         'local' => 'success',
                         'fetched' => 'info',
+                        'bunny_stream' => 'success',
+                        'contabo_object_storage' => 'primary',
+                        'nbx-engine' => 'info',
+                        'tele_ob' => 'primary',
                         'youtube' => 'danger',
                         'vimeo' => 'warning',
                         default => 'gray',
@@ -340,6 +409,32 @@ class VideoSourcesRelationManager extends RelationManager
                         'failed' => 'danger',
                         default => 'gray',
                     }),
+                Tables\Columns\TextColumn::make('metadata.telegram_status')
+                    ->label('Telegram')
+                    ->badge()
+                    ->default(null)
+                    ->placeholder('—')
+                    ->color(fn (?string $state): string => match ($state) {
+                        'telegram_submitted' => 'warning',
+                        'awaiting_admin_fetch' => 'info',
+                        'fetching' => 'primary',
+                        'attached' => 'success',
+                        'failed' => 'danger',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn (?string $state) => match ($state) {
+                        'telegram_submitted' => 'Queued',
+                        'awaiting_admin_fetch' => 'Queued',
+                        'fetching' => 'Fetching',
+                        'attached' => 'Attached',
+                        'failed' => 'Failed',
+                        default => $state ?? '—',
+                    })
+                    ->tooltip('Telegram to Object Storage import status'),
+                Tables\Columns\TextColumn::make('metadata.creator_ref')
+                    ->label('Creator')
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\IconColumn::make('is_primary')
                     ->boolean(),
                 Tables\Columns\IconColumn::make('is_active')
@@ -356,6 +451,10 @@ class VideoSourcesRelationManager extends RelationManager
                         'youtube' => 'YouTube',
                         'vimeo' => 'Vimeo',
                         'fetched' => 'Fetched',
+                        'bunny_stream' => 'Bunny Stream',
+                        'contabo_object_storage' => 'Contabo Object Storage',
+                        'nbx-engine' => 'NBX Engine',
+                        'tele_ob' => 'Tele-OB',
                     ]),
             ])
             ->headerActions([
@@ -406,6 +505,50 @@ class VideoSourcesRelationManager extends RelationManager
                             ->deletable(false)
                             ->visible(fn (Forms\Get $get): bool => count($get('variants') ?? []) > 0),
                     ]),
+                Tables\Actions\Action::make('sync_nbx')
+                    ->label('Sync NBX')
+                    ->icon('heroicon-o-arrow-path')
+                    ->visible(fn (VideoSource $record): bool => $record->type === 'nbx-engine')
+                    ->action(function (VideoSource $record): void {
+                        try {
+                            app(NbxVideoSourceService::class)->sync($record);
+                            Notification::make()->success()->title('NBX source synced')->send();
+                        } catch (\Throwable $exception) {
+                            Notification::make()->danger()->title('NBX sync failed')->body($exception->getMessage())->send();
+                        }
+                    }),
+                Tables\Actions\Action::make('backfill_nbx_contabo')
+                    ->label('Backfill NBX')
+                    ->icon('heroicon-o-bolt')
+                    ->color('success')
+                    ->visible(fn (VideoSource $record): bool => in_array($record->type, ['contabo_object_storage', 'url'], true)
+                        && app(ContaboObjectStorageService::class)->isContaboPublicUrl((string) ($record->url ?: $record->file_path ?: (is_array($record->metadata) ? ($record->metadata['public_url'] ?? '') : ''))))
+                    ->form([
+                        Forms\Components\Toggle::make('include_720p')
+                            ->label('Also schedule 720p HLS')
+                            ->helperText('480p HLS and faststart MP4 are always requested. 1080p stays disabled.'),
+                    ])
+                    ->action(function (VideoSource $record, array $data): void {
+                        try {
+                            $contabo = app(ContaboObjectStorageService::class);
+                            $url = (string) ($record->url ?: $record->file_path ?: (is_array($record->metadata) ? ($record->metadata['public_url'] ?? '') : ''));
+                            $source = app(NbxVideoSourceService::class)->submitObjectStorageBackfill($record->sourceable, [
+                                'key' => $contabo->objectKeyFromPublicUrl($url),
+                                'url' => $url,
+                                'disk' => $contabo->diskName(),
+                                'size' => $record->file_size,
+                            ], [
+                                'include_720p' => (bool) ($data['include_720p'] ?? false),
+                                'quality' => '480p',
+                                'format' => 'mp4',
+                                'is_active' => true,
+                            ], 'movie');
+
+                            Notification::make()->success()->title('NBX backfill queued')->body('Video source #' . $source->id . ' is tracking the NBX job.')->send();
+                        } catch (\Throwable $exception) {
+                            Notification::make()->danger()->title('NBX backfill failed')->body($exception->getMessage())->send();
+                        }
+                    }),
                 Tables\Actions\EditAction::make()
                     ->fillForm(function (VideoSource $record): array {
                         $data = $record->toArray();
@@ -437,6 +580,54 @@ class VideoSourcesRelationManager extends RelationManager
     /**
      * Format bytes to human readable format
      */
+    private function submitNbxFetchFromForm(Forms\Set $set, Forms\Get $get, string $assetType): void
+    {
+        $fetchUrl = trim((string) ($get('url') ?? ''));
+        $ownerRecord = $this->getOwnerRecord();
+
+        if ($fetchUrl === '' || ! $ownerRecord?->id) {
+            Notification::make()
+                ->warning()
+                ->title('NBX URL required')
+                ->body('Save the record and enter a remote video URL before queueing NBX Engine.')
+                ->send();
+            return;
+        }
+
+        try {
+            $source = app(NbxVideoSourceService::class)->submitRemote($ownerRecord, [
+                'url' => $fetchUrl,
+                'quality' => (string) ($get('quality') ?? '480p'),
+                'format' => (string) ($get('format') ?? 'mp4'),
+                'import_mode' => 'queue',
+                'nbx_storage_target' => $get('nbx_storage_target') ?? 'contabo',
+                'nbx_faststart' => (bool) ($get('nbx_faststart') ?? true),
+                'nbx_compress_enabled' => (bool) ($get('nbx_compress_enabled') ?? false),
+                'nbx_hls_480p' => (bool) ($get('nbx_hls_480p') ?? true),
+                'nbx_hls_720p' => (bool) ($get('nbx_hls_720p') ?? false),
+                'nbx_hls_1080p' => (bool) ($get('nbx_hls_1080p') ?? false),
+                'nbx_allow_downloads' => (bool) ($get('nbx_allow_downloads') ?? true),
+                'nbx_allow_hls_streaming' => (bool) ($get('nbx_allow_hls_streaming') ?? true),
+                'is_primary' => (bool) ($get('is_primary') ?? false),
+                'is_active' => (bool) ($get('is_active') ?? true),
+            ], $assetType);
+
+            $set('imported_source_id', $source->id);
+
+            Notification::make()
+                ->success()
+                ->title('NBX job queued')
+                ->body('NBX Engine accepted the video. Poll with Sync NBX or php artisan nbx:sync-video-sources.')
+                ->send();
+        } catch (\Throwable $exception) {
+            Notification::make()
+                ->danger()
+                ->title('NBX queue failed')
+                ->body($exception->getMessage())
+                ->send();
+        }
+    }
+
     private function formatBytes(?int $bytes, int $precision = 2): string
     {
         if ($bytes === null || $bytes <= 0) {
@@ -466,7 +657,7 @@ class VideoSourcesRelationManager extends RelationManager
         $owner = $this->getOwnerRecord();
         $sourceType = (string) ($data['type'] ?? $record?->type ?? 'url');
 
-        if ($sourceType === 'fetched' && ! empty($data['imported_source_id'])) {
+        if (in_array($sourceType, ['fetched', 'contabo_object_storage', 'nbx-engine'], true) && ! empty($data['imported_source_id'])) {
             $importedId = (int) $data['imported_source_id'];
             $existing = VideoSource::where('id', $importedId)
                 ->where('sourceable_type', $owner::class)
@@ -481,8 +672,30 @@ class VideoSourcesRelationManager extends RelationManager
                     'is_active' => (bool) ($data['is_active'] ?? $existing->is_active),
                 ]);
 
-                return $existing->fresh();
+                return $this->syncPlaybackReadiness($existing->fresh());
             }
+        }
+
+        if ($sourceType === 'bunny_stream') {
+            return $this->createOrUpdateBunnyStreamSource($record, $data, 'movie');
+        }
+
+        if ($sourceType === 'nbx-engine') {
+            if ($record && empty($data['url']) && empty($data['file_path'])) {
+                return app(NbxVideoSourceService::class)->sync($record);
+            }
+
+            return ! empty($data['url'])
+                ? app(NbxVideoSourceService::class)->submitRemote($owner, $data, 'movie')
+                : app(NbxVideoSourceService::class)->submitUpload($owner, $data, 'movie');
+        }
+
+        if ($sourceType === 'contabo_object_storage') {
+            return $this->createOrUpdateContaboObjectStorageSource($record, $data, 'movie');
+        }
+
+        if ($sourceType === 'tele_ob') {
+            return $this->createOrUpdateTeleObVideoSource($record, $data, 'movie');
         }
 
         if ($sourceType === 'local') {
@@ -548,10 +761,133 @@ class VideoSourcesRelationManager extends RelationManager
 
         if ($record) {
             $record->update($payload);
+            return $this->syncPlaybackReadiness($record->fresh());
+        }
+
+        return $this->syncPlaybackReadiness($this->getOwnerRecord()->videoSources()->create($payload));
+    }
+
+    private function createOrUpdateBunnyStreamSource(?VideoSource $record, array $data, string $assetType): VideoSource
+    {
+        $owner = $this->getOwnerRecord();
+        $bunnyService = app(BunnyStreamClientService::class);
+        $remoteUrl = trim((string) ($data['url'] ?? ''));
+        $uploadPath = (string) ($data['file_path'] ?? $record?->file_path ?? '');
+        $isExistingBunnyUrl = $remoteUrl !== '' && $bunnyService->isBunnyStreamUrl($remoteUrl);
+        if (! $isExistingBunnyUrl && ! $bunnyService->isConfigured()) {
+            throw new \RuntimeException('Bunny Stream is not configured. Set the Bunny Stream env values and clear config cache.');
+        }
+
+        $title = trim((string) ($owner->title ?? ucfirst($assetType) . ' ' . $owner->id));
+        $result = null;
+        $sourceMode = 'direct_url';
+
+        if ($isExistingBunnyUrl) {
+            $videoId = (string) ($bunnyService->extractVideoId($remoteUrl) ?? '');
+            $video = null;
+            if ($videoId !== '' && $bunnyService->isConfigured()) {
+                $lookup = $bunnyService->getVideo($videoId);
+                $video = ($lookup['ok'] ?? false) && is_array($lookup['data'] ?? null) ? (array) $lookup['data'] : null;
+            }
+            $result = [
+                'ok' => true,
+                'data' => [
+                    'video_id' => $videoId,
+                    'video' => $video,
+                    'playback' => $videoId !== '' && $bunnyService->isConfigured() ? $bunnyService->buildPlaybackPayload($videoId, $video) : null,
+                ],
+            ];
+        } elseif ($remoteUrl !== '') {
+            $sourceMode = 'url_fetch';
+            $result = $bunnyService->fetchVideoFromUrl($remoteUrl, $title . ' [' . now()->format('YmdHis') . ']');
+        } elseif ($uploadPath !== '' && ! str_starts_with($uploadPath, 'http://') && ! str_starts_with($uploadPath, 'https://')) {
+            $sourceMode = 'upload';
+            $result = $bunnyService->uploadFromStoragePath('public', $uploadPath, $title);
+        } else {
+            throw new \RuntimeException('Add a Bunny Stream URL, a remote URL to import, or a local video file to upload.');
+        }
+
+        if (! ($result['ok'] ?? false)) {
+            throw new \RuntimeException((string) ($result['error'] ?? 'Bunny Stream request failed.'));
+        }
+
+        $bunnyData = (array) ($result['data'] ?? []);
+        $playback = is_array($bunnyData['playback'] ?? null) ? (array) $bunnyData['playback'] : null;
+        $video = is_array($bunnyData['video'] ?? null) ? (array) $bunnyData['video'] : null;
+        $videoId = (string) ($bunnyData['video_id'] ?? ($video['guid'] ?? ''));
+        $hlsUrl = (string) (($playback['hls_master_url'] ?? null) ?: '');
+        $mp4Url = (string) (($playback['mp4_play_url'] ?? null) ?: ($playback['mp4_url'] ?? ''));
+        $originalUrl = (string) (($playback['original_url'] ?? null) ?: '');
+        $downloadUrl = (string) (($playback['download_url'] ?? null) ?: ($originalUrl ?: $mp4Url));
+        $remotePath = strtolower((string) parse_url($remoteUrl, PHP_URL_PATH));
+        if ($hlsUrl === '' && $remoteUrl !== '' && str_ends_with($remotePath, '.m3u8')) {
+            $hlsUrl = $remoteUrl;
+        }
+        if ($mp4Url === '' && $remoteUrl !== '' && str_ends_with($remotePath, '.mp4')) {
+            $mp4Url = $remoteUrl;
+        }
+        $playbackUrl = $hlsUrl ?: $mp4Url ?: ($sourceMode === 'direct_url' ? ($remoteUrl ?: null) : null);
+
+        $metadata = array_merge((array) ($data['metadata'] ?? []), [
+            'provider' => 'bunny_stream',
+            'fetch_status' => $videoId !== '' ? 'completed' : 'queued',
+            'fetch_mode' => $sourceMode,
+            'last_message' => $videoId !== ''
+                ? 'Bunny Stream source saved. Encoding may continue until Bunny marks the video finished.'
+                : 'Bunny Stream accepted the URL fetch, but the video ID was not visible yet.',
+            'bunny_stream_video_id' => $videoId !== '' ? $videoId : null,
+            'bunny_stream_library_id' => config('services.bunny_stream.library_id'),
+            'bunny_stream_status' => $playback['status'] ?? ($video['status'] ?? null),
+            'bunny_stream_status_label' => $playback['status_label'] ?? null,
+            'bunny_stream_encode_progress' => $playback['encode_progress'] ?? ($video['encodeProgress'] ?? null),
+            'bunny_stream_playback' => $playback,
+            'bunny_stream_video' => $video,
+            'source_url' => $remoteUrl !== '' ? $remoteUrl : null,
+            'playback_type' => $hlsUrl !== '' ? 'hls' : 'mp4',
+            'hls_master_url' => $hlsUrl !== '' ? $hlsUrl : null,
+            'original_url' => $originalUrl !== '' ? $originalUrl : null,
+            'mp4_play_url' => $mp4Url !== '' ? $mp4Url : null,
+            'mp4_url' => $mp4Url !== '' ? $mp4Url : null,
+            'download_url' => $downloadUrl !== '' ? $downloadUrl : null,
+            'last_synced_at' => now()->toDateTimeString(),
+        ]);
+
+        if ($sourceMode === 'upload' && $uploadPath !== '') {
+            Storage::disk('public')->delete($uploadPath);
+        }
+
+        $payload = [
+            'type' => 'bunny_stream',
+            'url' => $playbackUrl,
+            'file_path' => $playbackUrl,
+            'quality' => (string) ($data['quality'] ?? 'auto'),
+            'format' => $hlsUrl !== '' ? 'm3u8' : ((string) ($data['format'] ?? 'mp4') ?: 'mp4'),
+            'file_size' => isset($video['storageSize']) && (int) $video['storageSize'] > 0 ? (int) $video['storageSize'] : null,
+            'duration_seconds' => isset($video['length']) && (int) $video['length'] > 0 ? (int) $video['length'] : null,
+            'is_primary' => (bool) ($data['is_primary'] ?? $record?->is_primary ?? false),
+            'is_active' => $playbackUrl !== null && (bool) ($data['is_active'] ?? true),
+            'metadata' => $metadata,
+        ];
+
+        if ($record) {
+            $record->update($payload);
             return $record->fresh();
         }
 
         return $this->getOwnerRecord()->videoSources()->create($payload);
+    }
+
+    private function syncPlaybackReadiness(VideoSource $source): VideoSource
+    {
+        $owner = $this->getOwnerRecord();
+
+        try {
+            app(CdnPlaybackReadinessService::class)->syncForSourceable($owner, true, true);
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+
+        return $source->fresh();
     }
 
     /**
@@ -567,6 +903,41 @@ class VideoSourcesRelationManager extends RelationManager
             ->get();
 
         $meta = (array) ($record->metadata ?? []);
+        if (($meta['provider'] ?? null) === 'bunny_stream' || ! empty($meta['bunny_stream_video_id'])) {
+            $playback = is_array($meta['bunny_stream_playback'] ?? null) ? (array) $meta['bunny_stream_playback'] : [];
+
+            return [
+                'hls_master_url' => (string) ($playback['hls_master_url'] ?? $meta['hls_master_url'] ?? ''),
+                'mp4_playback_url' => (string) ($playback['mp4_play_url'] ?? $playback['mp4_url'] ?? $meta['mp4_play_url'] ?? ''),
+                'download_url' => (string) ($playback['download_url'] ?? $meta['download_url'] ?? ''),
+                'variants' => [],
+            ];
+        }
+
+        if (($meta['provider'] ?? null) === 'nbx_engine') {
+            return [
+                'hls_master_url' => (string) ($meta['hls_master_url'] ?? ''),
+                'mp4_playback_url' => (string) ($meta['mp4_play_url'] ?? $meta['mp4_url'] ?? ''),
+                'download_url' => (string) ($meta['download_url'] ?? ''),
+                'variants' => array_values(array_filter(array_map(static function ($quality): ?array {
+                    return is_array($quality) && isset($quality['url'])
+                        ? ['label' => (string) ($quality['label'] ?? $quality['id'] ?? 'variant'), 'url' => (string) $quality['url']]
+                        : null;
+                }, is_array($meta['qualities'] ?? null) ? $meta['qualities'] : []))),
+            ];
+        }
+
+        if (in_array(($meta['provider'] ?? null), ['contabo_object_storage', 'tele_ob'], true) || in_array($record->type, ['contabo_object_storage', 'tele_ob'], true)) {
+            $url = (string) ($meta['public_url'] ?? $meta['download_url'] ?? $record->file_path ?? $record->url ?? '');
+
+            return [
+                'hls_master_url' => strtolower((string) $record->format) === 'm3u8' ? $url : '',
+                'mp4_playback_url' => strtolower((string) $record->format) === 'm3u8' ? '' : $url,
+                'download_url' => $url,
+                'variants' => [],
+            ];
+        }
+
         $cdnSourceId = $meta['cdn_source_id'] ?? null;
         $currentPath = $record->file_path ?: $record->url;
 
@@ -630,4 +1001,3 @@ class VideoSourcesRelationManager extends RelationManager
         ];
     }
 }
-

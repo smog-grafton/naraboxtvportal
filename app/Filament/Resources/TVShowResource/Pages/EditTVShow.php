@@ -2,7 +2,11 @@
 
 namespace App\Filament\Resources\TVShowResource\Pages;
 
+use App\Events\ShowPublished;
 use App\Filament\Resources\TVShowResource;
+use App\Services\CampaignService;
+use App\Models\PushNotification;
+use App\Services\PushNotificationService;
 use App\Services\TmdbService;
 use App\Models\TVShow;
 use App\Models\Movie;
@@ -56,6 +60,62 @@ class EditTVShow extends EditRecord
             Actions\ViewAction::make(),
             Actions\DeleteAction::make(),
         ];
+    }
+
+    protected function mutateFormDataBeforeSave(array $data): array
+    {
+        // Ensure primary category_id is in categories pivot
+        if (!empty($data['category_id'])) {
+            $data['categories'] = $data['categories'] ?? [];
+            if (!in_array($data['category_id'], $data['categories'])) {
+                $data['categories'][] = $data['category_id'];
+            }
+        }
+        return $data;
+    }
+
+    protected function afterSave(): void
+    {
+        $tvShow = $this->record;
+        $formState = $this->form->getState();
+
+        if (!empty($formState['send_push_on_save'])) {
+            $title = $formState['push_title'] ?: $tvShow->title;
+            $body = $formState['push_body'] ?: 'Updated TV show: ' . $tvShow->title;
+
+            $notification = PushNotification::create([
+                'title' => $title,
+                'body' => $body,
+                'image_url' => $formState['push_image_url'] ?? null,
+                'deep_link' => 'app://tv-show/' . $tvShow->id,
+                'target_platform' => $formState['push_target_platform'] ?? 'all',
+                'target_audience' => 'all',
+                'provider' => 'default',
+                'notification_type' => 'marketing',
+                'status' => 'queued',
+            ]);
+
+            PushNotificationService::send($notification);
+        }
+
+        if ($tvShow->is_active && ($tvShow->content_status ?? 'published') === 'published') {
+            event(new ShowPublished($tvShow));
+        }
+
+        if (!empty($formState['send_email_on_save']) && $tvShow->is_active && ($tvShow->content_status ?? 'published') === 'published') {
+            app(CampaignService::class)->queueTemplateCampaign(
+                name: $formState['email_subject_override'] ?: ('TV show update: ' . $tvShow->title),
+                templateName: 'new_show_added',
+                templateData: [
+                    'show_title' => $tvShow->title,
+                    'watch_url' => rtrim((string) config('app.url'), '/') . '/tv-shows/' . $tvShow->id,
+                    'created_at' => now(),
+                ],
+                audienceType: $formState['email_audience_type'] ?? 'selected_users',
+                sendToAll: ($formState['email_audience_type'] ?? 'selected_users') === 'selected_users',
+                marketingOnly: (bool) ($formState['email_marketing_only'] ?? true),
+            );
+        }
     }
 
     private function importTmdbData(int $tmdbId): void

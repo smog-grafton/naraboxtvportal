@@ -76,6 +76,24 @@ class SeoController extends Controller
         return $cleaned;
     }
 
+    private function articleTitle(Article $article): string
+    {
+        $title = $article->seo_title ?: match ($article->post_type) {
+            'review' => "{$article->title} Review | NaraBox TV",
+            'movie_spotlight' => "{$article->title} | Movie Spotlight | NaraBox TV",
+            'vj_profile' => "{$article->title} | VJ Profile | NaraBox TV",
+            'feature' => "{$article->title} | Feature | NaraBox TV",
+            default => "{$article->title} | NaraBox TV News",
+        };
+
+        return Str::limit($title, 60, '...');
+    }
+
+    private function articleDescription(Article $article): string
+    {
+        return $this->cleanDescription($article->seo_description ?: $article->excerpt ?: $article->title, 160);
+    }
+
     /**
      * Movie SEO page
      */
@@ -276,24 +294,10 @@ class SeoController extends Controller
             abort(404);
         }
 
-        // Use the article's slug for canonical URL (not the input parameter)
-        $articleSlug = $article->slug;
-
-        // Build meta title
-        $title = "{$article->title} – NaraBox TV News";
-        
-        // Ensure title is ≤ 60 characters
-        if (strlen($title) > 60) {
-            $title = substr($title, 0, 57) . '...';
-        }
-
-        // Meta description - use excerpt if available
-        $description = $this->cleanDescription($article->excerpt ?: $article->title, 160);
-
-        // OG Image
-        $ogImage = $this->getImageUrl($article->image);
-
-        // Canonical URL - always use slug
+        $articleSlug = $article->slug ?: $article->id;
+        $title = $this->articleTitle($article);
+        $description = $this->articleDescription($article);
+        $ogImage = $this->getImageUrl($article->og_image ?: $article->image);
         $canonical = $this->getBaseUrl() . "/news/{$articleSlug}";
 
         return view('seo.page', [
@@ -313,8 +317,8 @@ class SeoController extends Controller
     public function newsListing()
     {
         $articleCount = Article::where('is_published', true)->count();
-        $title = "News & Updates – Latest Articles & Industry News | NaraBox TV";
-        $description = "Stay updated with the latest news, updates, and industry insights from NaraBox TV. Read about platform updates, movie releases, TV show announcements, and VJ-translated content news.";
+        $title = "Movie News, Reviews & Editorial Features | NaraBox TV";
+        $description = "Explore {$articleCount}+ NaraBox editorial stories covering movie news, factual reviews, VJ profiles, promotional spotlights, and entertainment features.";
         $canonical = $this->getBaseUrl() . "/news";
         $ogImage = $this->getBaseUrl() . "/assets/images/meta/metaog.jpeg";
 
@@ -520,4 +524,3 @@ class SeoController extends Controller
         ]);
     }
 }
-

@@ -18,6 +18,12 @@ class FetchVideoFromUrlJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    public int $tries = 1;
+
+    public int $timeout = 21600;
+
+    public bool $failOnTimeout = true;
+
     public function __construct(
         public int $videoSourceId,
         public string $url,
@@ -25,6 +31,7 @@ class FetchVideoFromUrlJob implements ShouldQueue
         public int $sourceableId,
         public string $quality = 'auto',
         public string $format = 'auto',
+        public string $storageTarget = 'cdn',
     ) {
     }
 
@@ -55,6 +62,8 @@ class FetchVideoFromUrlJob implements ShouldQueue
                 'sourceable_id' => $this->sourceableId,
                 'quality' => $this->quality,
                 'format' => $this->format,
+                'import_mode' => 'now',
+                'storage_target' => $this->storageTarget,
             ]);
 
             $response = $controller->fetch($request);

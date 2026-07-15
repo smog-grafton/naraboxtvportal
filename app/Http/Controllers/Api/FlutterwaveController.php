@@ -15,6 +15,11 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
+/**
+ * @group Payments
+ *
+ * Flutterwave: initiate (returns link/redirect), verify by transaction_ref. Webhook handles callback.
+ */
 class FlutterwaveController extends Controller
 {
     private FlutterwaveService $flutterwaveService;

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\PaymentSucceeded;
 use App\Models\Payment;
 use App\Models\PaymentTransaction;
 use App\Models\UserRental;
@@ -97,6 +98,12 @@ class PaymentApprovalService
         if (!$skipTransactionUpdate) {
             $transaction->update(['status' => 'SUCCESS']);
         }
+
+        if (in_array($transaction->type, ['RENT', 'BUY'])) {
+            app(CreatorEarningsService::class)->allocateFromTransaction($transaction);
+        }
+
+        event(new PaymentSucceeded($transaction->fresh(['user', 'subscriptionPlan', 'transactionable', 'paymentGateway'])));
     }
 
     /**

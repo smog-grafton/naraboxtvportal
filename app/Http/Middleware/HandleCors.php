@@ -27,6 +27,9 @@ class HandleCors
                 'http://127.0.0.1:7000',
                 'http://localhost:8000',
                 'http://127.0.0.1:8000',
+                'https://naraboxtv.com',
+                'https://www.naraboxtv.com',
+                'https://portal.naraboxtv.com',
             ];
             
             $isAllowed = false;
@@ -50,7 +53,7 @@ class HandleCors
             return response('', 200)
                 ->header('Access-Control-Allow-Origin', $isAllowed || !$origin ? ($origin ?: '*') : '*')
                 ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
+                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key')
                 ->header('Access-Control-Allow-Credentials', 'true')
                 ->header('Access-Control-Max-Age', '86400');
         }
@@ -68,6 +71,9 @@ class HandleCors
             'http://127.0.0.1:3000',
             'http://localhost:8000',
             'http://127.0.0.1:8000',
+            'https://naraboxtv.com',
+            'https://www.naraboxtv.com',
+            'https://portal.naraboxtv.com',
         ];
 
         // Check if origin matches pattern
@@ -80,10 +86,12 @@ class HandleCors
                 }
             }
             
-            // Check patterns - match localhost with or without port
+            // Check patterns - match localhost with or without port and main domains
             if (!$isAllowed) {
                 if (preg_match('#^http://localhost(:\d+)?$#', $origin) || 
-                    preg_match('#^http://127\.0\.0\.1(:\d+)?$#', $origin)) {
+                    preg_match('#^http://127\.0\.0\.1(:\d+)?$#', $origin) ||
+                    preg_match('#^https?://(www\.)?naraboxtv\.com$#', $origin) ||
+                    preg_match('#^https?://portal\.naraboxtv\.com$#', $origin)) {
                     $isAllowed = true;
                 }
             }
@@ -92,7 +100,7 @@ class HandleCors
         if ($isAllowed || !$origin) {
             $response->headers->set('Access-Control-Allow-Origin', $origin ?: '*');
             $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-            $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+            $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key');
             $response->headers->set('Access-Control-Allow-Credentials', 'true');
             $response->headers->set('Access-Control-Expose-Headers', '');
         }

@@ -60,6 +60,15 @@ class EpisodeResource extends Resource
                     ->helperText('Note: Use Video Sources tab for managing multiple video sources. This field is kept for backward compatibility.'),
                 Forms\Components\Toggle::make('download_enabled')
                     ->required(),
+                Forms\Components\Section::make('Notifications')
+                    ->schema([
+                        Forms\Components\Toggle::make('send_email_on_save')
+                            ->label('Email users after save')
+                            ->default(false),
+                        Forms\Components\Toggle::make('send_push_on_save')
+                            ->label('Create inbox notification after save')
+                            ->default(true),
+                    ])->columns(2),
             ]);
     }
 

@@ -2,15 +2,18 @@
 
 namespace App\Filament\Resources;
 
+use App\Events\CommentReplyCreated;
 use App\Filament\Resources\CommentResource\Pages;
 use App\Models\Comment;
 use App\Models\Movie;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 
 class CommentResource extends Resource
 {
@@ -106,6 +109,10 @@ class CommentResource extends Resource
                     ->label('Replies')
                     ->badge()
                     ->color('info'),
+                Tables\Columns\TextColumn::make('parent.user_name')
+                    ->label('Replying To')
+                    ->placeholder('Top-level')
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('likes')
                     ->label('Likes')
                     ->sortable()
@@ -142,6 +149,39 @@ class CommentResource extends Resource
                     }),
             ])
             ->actions([
+                Tables\Actions\Action::make('reply')
+                    ->label('Reply')
+                    ->icon('heroicon-o-chat-bubble-left-ellipsis')
+                    ->color('primary')
+                    ->form([
+                        Forms\Components\Textarea::make('text')
+                            ->label('Reply')
+                            ->required()
+                            ->rows(4)
+                            ->maxLength(5000),
+                    ])
+                    ->action(function (Comment $record, array $data): void {
+                        $user = Auth::user();
+                        $replyTarget = $record->parent_id ? $record->parent : $record;
+                        $displayName = is_object($user) ? (string) ($user->name ?? 'Admin') : 'Admin';
+
+                        $reply = Comment::create([
+                            'media_id' => (int) $replyTarget->media_id,
+                            'user_id' => is_object($user) && isset($user->id) ? (int) $user->id : null,
+                            'user_name' => $displayName,
+                            'avatar' => 'https://ui-avatars.com/api/?name=' . urlencode($displayName),
+                            'text' => (string) $data['text'],
+                            'parent_id' => (int) $replyTarget->id,
+                            'likes' => 0,
+                        ]);
+
+                        event(new CommentReplyCreated($reply));
+
+                        Notification::make()
+                            ->title('Reply posted')
+                            ->success()
+                            ->send();
+                    }),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
                 Tables\Actions\Action::make('view_replies')

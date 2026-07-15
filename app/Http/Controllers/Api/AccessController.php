@@ -8,13 +8,78 @@ use App\Models\TVShow;
 use App\Models\UserRental;
 use App\Models\UserPurchase;
 use App\Models\UserSubscription;
+use App\Services\PendingPaymentResolverService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
+/**
+ * @group Access & Views
+ *
+ * Check access to content (free/subscription/rent/buy); track views.
+ */
 class AccessController extends Controller
 {
+    public function __construct(
+        private readonly PendingPaymentResolverService $pendingPaymentResolver,
+    ) {
+    }
+
     /**
      * Check if user has access to a movie or TV show
+     *
+     * Frontend helper to decide whether to show **Play**, **Rent**, **Buy**, **Subscribe**, or a locked state.
+     *
+     * Rules:
+     * - Free content (`is_free = 1`) is always accessible (no auth required).
+     * - Premium content (`is_premium = 1`) requires an active subscription.
+     * - Paid content with `price_rent` / `price_buy` checks rentals and purchases.
+     * - Pending transactions are surfaced so the UI can show “Pending approval”.
+     *
+     * Returns a normalized `access_type`:
+     * - `FREE`
+     * - `SUBSCRIPTION`
+     * - `PREMIUM` (subscription required, but none active)
+     * - `PURCHASED`
+     * - `RENTED`
+     * - `PENDING`
+     * - `PAID` (payment required: rent and/or buy)
+     *
+     * @bodyParam media_id integer required The `id` of the movie or TV show to check. Example: 1
+     * @bodyParam media_type string required Must be `MOVIE` or `TV_SHOW`. Example: MOVIE
+     *
+     * @response 200 {
+     *  "has_access": true,
+     *  "access_type": "FREE",
+     *  "reason": "Content is free"
+     * }
+     *
+     * @response 200 scenario="Premium with active subscription" {
+     *  "has_access": true,
+     *  "access_type": "SUBSCRIPTION",
+     *  "reason": "You have an active subscription",
+     *  "subscription_expires_at": "2026-03-31T20:00:00+03:00"
+     * }
+     *
+     * @response 200 scenario="Paid but not yet rented/bought" {
+     *  "has_access": false,
+     *  "access_type": "PAID",
+     *  "reason": "Payment required",
+     *  "can_rent": true,
+     *  "can_buy": true,
+     *  "rent_price": 1000,
+     *  "buy_price": 2200
+     * }
+     *
+     * @response 401 {
+     *  "has_access": false,
+     *  "access_type": null,
+     *  "reason": "Authentication required",
+     *  "requires_auth": true
+     * }
+     *
+     * @response 404 {
+     *  "error": "Media not found"
+     * }
      */
     public function checkAccess(Request $request)
     {
@@ -57,36 +122,7 @@ class AccessController extends Controller
             ]);
         }
 
-        // PRIORITY 1: For premium content, check subscription FIRST (subscription overrides everything)
-        if ($media->is_premium) {
-            $activeSubscription = UserSubscription::where('user_id', $user->id)
-                ->where('status', 'ACTIVE')
-                ->where('expires_at', '>', now())
-                ->first();
-
-            if ($activeSubscription) {
-                return response()->json([
-                    'has_access' => true,
-                    'access_type' => 'SUBSCRIPTION',
-                    'reason' => 'You have an active subscription',
-                    'subscription_expires_at' => $activeSubscription->expires_at,
-                ]);
-            }
-
-            // Premium content without subscription - subscription is still required
-            return response()->json([
-                'has_access' => false,
-                'access_type' => 'PREMIUM',
-                'reason' => 'This content requires a premium subscription. Subscribe to access premium content.',
-                'requires_subscription' => true,
-                'can_rent' => !empty($media->price_rent),
-                'can_buy' => !empty($media->price_buy),
-                'rent_price' => $media->price_rent,
-                'buy_price' => $media->price_buy,
-            ]);
-        }
-
-        // PRIORITY 2: Check if user has purchased (permanent access)
+        // PRIORITY 1: Purchased access should outlive subscription expiry.
         $purchase = UserPurchase::where('user_id', $user->id)
             ->where('purchasable_type', $mediaType === 'MOVIE' ? Movie::class : TVShow::class)
             ->where('purchasable_id', $mediaId)
@@ -101,7 +137,7 @@ class AccessController extends Controller
             ]);
         }
 
-        // PRIORITY 3: Check if user has active rental
+        // PRIORITY 2: Active rentals should also bypass subscription expiry.
         $rental = UserRental::where('user_id', $user->id)
             ->where('rentable_type', $mediaType === 'MOVIE' ? Movie::class : TVShow::class)
             ->where('rentable_id', $mediaId)
@@ -119,18 +155,21 @@ class AccessController extends Controller
             ]);
         }
 
-        // PRIORITY 4: Check for pending payments
-        $pendingTransaction = \App\Models\PaymentTransaction::where('user_id', $user->id)
-            ->where('transactionable_type', $mediaType === 'MOVIE' ? Movie::class : TVShow::class)
-            ->where('transactionable_id', $mediaId)
-            ->where('status', 'PENDING')
-            ->first();
+        // PRIORITY 3: Pending rent/buy payments for this title come before subscription prompts.
+        $pendingTransaction = $this->pendingPaymentResolver->getPendingContentTransaction(
+            $user->id,
+            $mediaType === 'MOVIE' ? Movie::class : TVShow::class,
+            $mediaId,
+        );
 
         if ($pendingTransaction) {
+            $isManualReview = $pendingTransaction->paymentGateway?->type === 'MANUAL';
             return response()->json([
                 'has_access' => false,
                 'access_type' => 'PENDING',
-                'reason' => 'Payment pending approval',
+                'reason' => $isManualReview
+                    ? 'Payment is waiting for admin approval.'
+                    : 'We are still confirming your payment.',
                 'pending_payment' => true,
                 'transaction_ref' => $pendingTransaction->transaction_ref,
                 'can_rent' => !empty($media->price_rent),
@@ -140,7 +179,52 @@ class AccessController extends Controller
             ]);
         }
 
-        // Content is not free, not premium, check if rent/buy available
+        // PRIORITY 4: Premium content can still be unlocked by an active subscription.
+        if ($media->is_premium) {
+            $activeSubscription = UserSubscription::where('user_id', $user->id)
+                ->where('status', 'ACTIVE')
+                ->where('expires_at', '>', now())
+                ->first();
+
+            if ($activeSubscription) {
+                return response()->json([
+                    'has_access' => true,
+                    'access_type' => 'SUBSCRIPTION',
+                    'reason' => 'You have an active subscription',
+                    'subscription_expires_at' => $activeSubscription->expires_at,
+                ]);
+            }
+
+            $pendingSubscription = $this->pendingPaymentResolver->getPendingSubscriptionTransaction($user->id);
+
+            if ($pendingSubscription) {
+                $isManualReview = $pendingSubscription->paymentGateway?->type === 'MANUAL';
+
+                return response()->json([
+                    'has_access' => false,
+                    'access_type' => 'PENDING',
+                    'reason' => $isManualReview
+                        ? 'Your subscription payment is waiting for admin approval.'
+                        : 'We are still confirming your subscription payment.',
+                    'pending_payment' => true,
+                    'transaction_ref' => $pendingSubscription->transaction_ref,
+                    'requires_subscription' => true,
+                ]);
+            }
+
+            return response()->json([
+                'has_access' => false,
+                'access_type' => 'PREMIUM',
+                'reason' => 'This content requires a premium subscription. Subscribe to access premium content.',
+                'requires_subscription' => true,
+                'can_rent' => !empty($media->price_rent),
+                'can_buy' => !empty($media->price_buy),
+                'rent_price' => $media->price_rent,
+                'buy_price' => $media->price_buy,
+            ]);
+        }
+
+        // Content is not free or premium, so rent/buy decides access.
         return response()->json([
             'has_access' => false,
             'access_type' => 'PAID',

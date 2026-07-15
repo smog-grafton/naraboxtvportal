@@ -23,9 +23,11 @@ return new class extends Migration
                 $table->dropColumn('media_id');
             }
             
-            // Add morphs for rentable/purchasable (movies, tv_shows) if they don't exist
+            // Add morphs for rentable/purchasable (movies, tv_shows) if they don't exist.
+            // Custom (shorter) index name: the auto-generated name exceeds MySQL's
+            // 64-char identifier limit for this table/column combination.
             if (!Schema::hasColumn('payment_transactions', 'transactionable_type')) {
-                $table->nullableMorphs('transactionable');
+                $table->nullableMorphs('transactionable', 'pay_trans_transactionable_index');
             }
             
             // Add subscription_plan_id for subscription transactions if it doesn't exist
@@ -41,7 +43,7 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('payment_transactions', function (Blueprint $table) {
-            $table->dropMorphs('transactionable');
+            $table->dropMorphs('transactionable', 'pay_trans_transactionable_index');
             $table->dropForeign(['subscription_plan_id']);
             $table->dropColumn('subscription_plan_id');
             

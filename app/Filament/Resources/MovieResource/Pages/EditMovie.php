@@ -2,7 +2,11 @@
 
 namespace App\Filament\Resources\MovieResource\Pages;
 
+use App\Events\MoviePublished;
 use App\Filament\Resources\MovieResource;
+use App\Services\CampaignService;
+use App\Models\PushNotification;
+use App\Services\PushNotificationService;
 use App\Services\TmdbService;
 use App\Models\Movie;
 use App\Models\Genre;
@@ -43,6 +47,50 @@ class EditMovie extends EditRecord
             Actions\ViewAction::make(),
             Actions\DeleteAction::make(),
         ];
+    }
+
+    protected function afterSave(): void
+    {
+        $movie = $this->record;
+        $formState = $this->form->getState();
+
+        if (!empty($formState['send_push_on_save'])) {
+            $title = $formState['push_title'] ?: $movie->title;
+            $body = $formState['push_body'] ?: 'Updated movie: ' . $movie->title;
+
+            $notification = PushNotification::create([
+                'title' => $title,
+                'body' => $body,
+                'image_url' => $formState['push_image_url'] ?? null,
+                'deep_link' => 'app://movie/' . $movie->id,
+                'target_platform' => $formState['push_target_platform'] ?? 'all',
+                'target_audience' => 'all',
+                'provider' => 'default',
+                'notification_type' => 'marketing',
+                'status' => 'queued',
+            ]);
+
+            PushNotificationService::send($notification);
+        }
+
+        if ($movie->is_active && ($movie->content_status ?? 'published') === 'published') {
+            event(new MoviePublished($movie));
+        }
+
+        if (!empty($formState['send_email_on_save']) && $movie->is_active && ($movie->content_status ?? 'published') === 'published') {
+            app(CampaignService::class)->queueTemplateCampaign(
+                name: $formState['email_subject_override'] ?: ('Movie update: ' . $movie->title),
+                templateName: 'new_movie_added',
+                templateData: [
+                    'movie_title' => $movie->title,
+                    'watch_url' => rtrim((string) config('app.url'), '/') . '/movies/' . $movie->id,
+                    'created_at' => now(),
+                ],
+                audienceType: $formState['email_audience_type'] ?? 'selected_users',
+                sendToAll: ($formState['email_audience_type'] ?? 'selected_users') === 'selected_users',
+                marketingOnly: (bool) ($formState['email_marketing_only'] ?? true),
+            );
+        }
     }
 
     private function importTmdbData(int $tmdbId): void

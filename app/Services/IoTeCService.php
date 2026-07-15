@@ -229,4 +229,179 @@ class IoTeCService
         }
         return 'pending';
     }
+
+    /**
+     * Initiate disbursement (mobile money payout). Amount in UGX, min 500.
+     * Returns ['request_id' => uuid, 'status' => string, 'raw' => array] or ['error' => message].
+     */
+    public function disburse(
+        string $externalId,
+        float $amount,
+        string $payeeMsisdn,
+        ?string $payeeName = null,
+        ?string $payeeNote = null
+    ): array {
+        $token = $this->getAccessToken();
+        if (! $token) {
+            return ['error' => 'Failed to obtain ioTec access token'];
+        }
+
+        $amountInt = (int) round($amount);
+        if ($amountInt < 500) {
+            return ['error' => 'Amount must be at least 500 UGX'];
+        }
+
+        $payeeNormalized = self::normalizePhone($payeeMsisdn);
+        if (! self::validatePhone($payeeMsisdn)) {
+            return ['error' => 'Invalid Uganda phone number'];
+        }
+
+        if ($this->walletId === null || $this->walletId === '') {
+            return ['error' => 'ioTec Wallet ID is not configured.'];
+        }
+
+        $payload = [
+            'amount' => $amountInt,
+            'payee' => $payeeNormalized,
+            'externalId' => $externalId,
+            'currency' => 'UGX',
+            'walletId' => $this->walletId,
+        ];
+        if ($payeeName !== null && $payeeName !== '') {
+            $payload['payeeName'] = substr($payeeName, 0, 200);
+        }
+        if ($payeeNote !== null && $payeeNote !== '') {
+            $payload['payeeNote'] = substr($payeeNote, 0, 100);
+        }
+
+        $response = Http::withToken($token)
+            ->acceptJson()
+            ->post($this->payBaseUrl . '/api/disbursements/disburse', $payload);
+
+        $data = $response->json();
+        if (! $response->successful()) {
+            Log::warning('ioTec disburse failed', [
+                'status' => $response->status(),
+                'external_id' => $externalId,
+                'payee_masked' => self::maskPhone($payeeMsisdn),
+            ]);
+            return [
+                'error' => $data['message'] ?? $data['error'] ?? $response->body() ?: 'Disburse request failed',
+            ];
+        }
+
+        $requestId = $data['id'] ?? null;
+        $status = $data['status'] ?? 'Pending';
+        if (! $requestId) {
+            return ['error' => 'No request id in ioTec response'];
+        }
+
+        return [
+            'request_id' => $requestId,
+            'status' => $status,
+            'raw' => $data,
+        ];
+    }
+
+    /**
+     * Get disbursement status. Returns ['normalized' => ..., 'status' => ..., 'raw' => ...] or ['error' => ...].
+     */
+    public function getDisbursementStatus(string $transactionId): array
+    {
+        $token = $this->getAccessToken();
+        if (! $token) {
+            return ['normalized' => 'failed', 'error' => 'No access token'];
+        }
+
+        $response = Http::withToken($token)
+            ->acceptJson()
+            ->get($this->payBaseUrl . '/api/disbursements/status/' . $transactionId);
+
+        $data = $response->json();
+        if (! $response->successful()) {
+            return [
+                'normalized' => 'failed',
+                'error' => $data['message'] ?? $response->body() ?: 'Status request failed',
+                'raw' => $data,
+            ];
+        }
+
+        $status = $data['status'] ?? 'Pending';
+        $normalized = $this->mapStatus($status);
+
+        return [
+            'normalized' => $normalized,
+            'status' => $status,
+            'raw' => $data,
+        ];
+    }
+
+    /**
+     * Initiate bank account disbursement.
+     * Returns ['request_id' => uuid, 'status' => string, 'raw' => array] or ['error' => message].
+     */
+    public function bankDisburse(
+        string $externalId,
+        float $amount,
+        string $accountName,
+        string $accountNumber,
+        ?string $bankId = null,
+        ?string $bankIdentificationCode = null
+    ): array {
+        $token = $this->getAccessToken();
+        if (! $token) {
+            return ['error' => 'Failed to obtain ioTec access token'];
+        }
+
+        $amountInt = (int) round($amount);
+        if ($amountInt < 500) {
+            return ['error' => 'Amount must be at least 500 UGX'];
+        }
+
+        if ($this->walletId === null || $this->walletId === '') {
+            return ['error' => 'ioTec Wallet ID is not configured.'];
+        }
+
+        $payload = [
+            'amount' => $amountInt,
+            'accountName' => $accountName,
+            'accountNumber' => $accountNumber,
+            'walletId' => $this->walletId,
+            'externalId' => $externalId,
+            'currency' => 'UGX',
+        ];
+        if ($bankId) {
+            $payload['bankId'] = $bankId;
+        }
+        if ($bankIdentificationCode) {
+            $payload['bankIdentificationCode'] = $bankIdentificationCode;
+        }
+
+        $response = Http::withToken($token)
+            ->acceptJson()
+            ->post($this->payBaseUrl . '/api/disbursements/bank-disburse', $payload);
+
+        $data = $response->json();
+        if (! $response->successful()) {
+            Log::warning('ioTec bank disburse failed', [
+                'status' => $response->status(),
+                'external_id' => $externalId,
+            ]);
+            return [
+                'error' => $data['message'] ?? $data['error'] ?? $response->body() ?: 'Bank disburse request failed',
+            ];
+        }
+
+        $requestId = $data['id'] ?? null;
+        $status = $data['status'] ?? 'Pending';
+        if (! $requestId) {
+            return ['error' => 'No request id in ioTec response'];
+        }
+
+        return [
+            'request_id' => $requestId,
+            'status' => $status,
+            'raw' => $data,
+        ];
+    }
 }

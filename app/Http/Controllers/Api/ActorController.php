@@ -6,8 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Actor;
 use Illuminate\Http\Request;
 
+/**
+ * @group Actors
+ *
+ * Cast. List with search/trending; get by id or slug with movies.
+ */
 class ActorController extends Controller
 {
+    /**
+     * List actors. Query: search, trending (1), per_page.
+     */
     public function index(Request $request)
     {
         $query = Actor::query();

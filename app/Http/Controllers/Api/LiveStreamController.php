@@ -6,10 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\LiveStream;
 use Illuminate\Http\Request;
 
+/**
+ * @group Live Streams
+ *
+ * Live channels. List with optional type=live|archived; get by id.
+ */
 class LiveStreamController extends Controller
 {
     /**
-     * Get all active live streams
+     * Get active live streams. Query: type (live|archived).
      */
     public function index(Request $request)
     {

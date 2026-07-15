@@ -44,7 +44,7 @@ class CdnFetchProxyController extends Controller
             isset($validated['filename']) ? (string) $validated['filename'] : null,
             isset($validated['mime_type']) ? (string) $validated['mime_type'] : null,
             isset($validated['size_bytes']) ? (int) $validated['size_bytes'] : null
-        );
+        )->onQueue('cdn-proxy');
 
         return response()->json([
             'success' => true,
@@ -95,4 +95,3 @@ class CdnFetchProxyController extends Controller
         return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
     }
 }
-

@@ -12,6 +12,13 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // One-off production data repair (MySQL-only raw SQL: INNER JOIN UPDATE + DATE_SUB).
+        // No-op on other drivers (e.g. sqlite in tests) — a fresh test DB has no stale
+        // pending transactions to repair, so skipping here changes no runtime behavior.
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return;
+        }
+
         // Mark old PENDING automated gateway transactions as FAILED
         // Only transactions older than 1 hour are marked as failed
         // This prevents marking transactions that are legitimately still processing

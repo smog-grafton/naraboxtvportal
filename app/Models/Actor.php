@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Storage;
@@ -9,6 +10,8 @@ use Illuminate\Support\Str;
 
 class Actor extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'name',
         'slug',
@@ -23,9 +26,37 @@ class Actor extends Model
         
         static::creating(function ($actor) {
             if (empty($actor->slug)) {
-                $actor->slug = Str::slug($actor->name);
+                $actor->slug = static::makeUniqueSlug((string) $actor->name);
             }
         });
+
+        static::updating(function ($actor) {
+            if (empty($actor->slug)) {
+                $actor->slug = static::makeUniqueSlug((string) $actor->name, $actor->id);
+            }
+        });
+    }
+
+    public static function makeUniqueSlug(string $name, ?int $ignoreId = null): string
+    {
+        $base = Str::slug($name);
+
+        if ($base === '') {
+            $base = 'actor-' . substr(md5($name), 0, 12);
+        }
+
+        $slug = $base;
+        $suffix = 2;
+
+        while (static::query()
+            ->where('slug', $slug)
+            ->when($ignoreId, fn ($query) => $query->whereKeyNot($ignoreId))
+            ->exists()
+        ) {
+            $slug = $base . '-' . $suffix++;
+        }
+
+        return $slug;
     }
 
     /**

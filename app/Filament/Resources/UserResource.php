@@ -111,7 +111,7 @@ class UserResource extends Resource
                     ->label('Role')
                     ->sortable()
                     ->badge()
-                    ->color(fn (string $state): string => match ($state) {
+                    ->color(fn (?string $state): string => match ($state) {
                         'Administrator' => 'danger',
                         'Video Jockey' => 'warning',
                         'Customer' => 'success',

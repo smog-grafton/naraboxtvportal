@@ -30,7 +30,22 @@ class SyncVideoSourcesToDownloads extends Command
         $movieId = $this->option('movie-id');
         $episodeId = $this->option('episode-id');
 
-        $query = VideoSource::whereIn('type', ['url', 'fetched', 'local'])
+        $query = VideoSource::whereIn('type', [
+            'url',
+            'direct',
+            'upload',
+            'uploaded',
+            'local',
+            'fetched',
+            'curl',
+            'cdn',
+            'legacy_cdn',
+            'contabo',
+            'contabo_object_storage',
+            'tele_ob',
+            'bunny_stream',
+            'nbx-engine',
+        ])
             ->where('is_active', true);
 
         if ($movieId) {
@@ -46,13 +61,22 @@ class SyncVideoSourcesToDownloads extends Command
         $skipped = 0;
 
         foreach ($videoSources as $videoSource) {
+            $downloadUrl = $this->downloadUrlFor($videoSource);
+            $downloadPathFormat = pathinfo((string) parse_url((string) $downloadUrl, PHP_URL_PATH), PATHINFO_EXTENSION);
+            $downloadFormat = strtolower((string) ($downloadPathFormat ?: ($videoSource->format ?: 'mp4')));
+            if (! $downloadUrl || $downloadFormat === 'm3u8' || str_ends_with(strtolower((string) parse_url($downloadUrl, PHP_URL_PATH)), '.m3u8')) {
+                $skipped++;
+                continue;
+            }
+
             // Check if download source already exists
             $existing = DownloadSource::where('downloadable_type', $videoSource->sourceable_type)
                 ->where('downloadable_id', $videoSource->sourceable_id)
                 ->where('type', $videoSource->type)
                 ->where(function($q) use ($videoSource) {
-                    if ($videoSource->type === 'url' && $videoSource->url) {
-                        $q->where('url', $videoSource->url);
+                    $downloadUrl = $this->downloadUrlFor($videoSource);
+                    if ($this->usesDownloadUrlColumn($videoSource) && $downloadUrl) {
+                        $q->where('url', $downloadUrl);
                     } elseif (in_array($videoSource->type, ['fetched', 'local']) && $videoSource->file_path) {
                         $q->where('file_path', $videoSource->file_path);
                     }
@@ -69,12 +93,12 @@ class SyncVideoSourcesToDownloads extends Command
                 'downloadable_type' => $videoSource->sourceable_type,
                 'downloadable_id' => $videoSource->sourceable_id,
                 'type' => $videoSource->type,
-                'url' => $videoSource->type === 'url' ? $videoSource->url : null,
-                'file_path' => in_array($videoSource->type, ['fetched', 'local']) ? $videoSource->file_path : null,
+                'url' => $this->usesDownloadUrlColumn($videoSource) || ! $videoSource->file_path ? $downloadUrl : null,
+                'file_path' => in_array($videoSource->type, ['fetched', 'local'], true) && $videoSource->file_path ? $videoSource->file_path : null,
                 'quality' => $videoSource->quality ?: 'auto',
-                'format' => $videoSource->format ?: 'mp4',
+                'format' => $downloadFormat ?: 'mp4',
                 'file_size' => $videoSource->file_size,
-                'label' => ($videoSource->quality ?: 'auto') . ' ' . strtoupper($videoSource->format ?: 'mp4'),
+                'label' => ($videoSource->quality ?: 'auto') . ' ' . strtoupper($downloadFormat ?: 'mp4'),
                 'is_active' => $videoSource->is_active,
             ]);
 
@@ -87,5 +111,45 @@ class SyncVideoSourcesToDownloads extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    private function downloadUrlFor(VideoSource $videoSource): ?string
+    {
+        $metadata = is_array($videoSource->metadata) ? $videoSource->metadata : [];
+        foreach ([
+            $metadata['download_url'] ?? null,
+            $metadata['download_mp4_url'] ?? null,
+            $metadata['mp4_play_url'] ?? null,
+            $metadata['mp4_url'] ?? null,
+            $metadata['original_url'] ?? null,
+            $metadata['public_url'] ?? null,
+            $metadata['source_url'] ?? null,
+            $videoSource->full_url,
+            $videoSource->url,
+            $videoSource->file_path,
+        ] as $url) {
+            if (is_string($url) && trim($url) !== '') {
+                return trim($url);
+            }
+        }
+
+        return null;
+    }
+
+    private function usesDownloadUrlColumn(VideoSource $videoSource): bool
+    {
+        return in_array($videoSource->type, [
+            'url',
+            'direct',
+            'upload',
+            'uploaded',
+            'cdn',
+            'legacy_cdn',
+            'contabo',
+            'contabo_object_storage',
+            'tele_ob',
+            'bunny_stream',
+            'nbx-engine',
+        ], true);
     }
 }

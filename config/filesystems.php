@@ -60,6 +60,20 @@ return [
             'report' => false,
         ],
 
+        'contabo' => [
+            'driver' => 's3',
+            'key' => env('CONTABO_OBJECT_STORAGE_ACCESS_KEY'),
+            'secret' => env('CONTABO_OBJECT_STORAGE_SECRET_KEY'),
+            'region' => env('CONTABO_OBJECT_STORAGE_REGION', 'US-central'),
+            'bucket' => env('CONTABO_OBJECT_STORAGE_BUCKET', 'nbx'),
+            'url' => env('CONTABO_OBJECT_STORAGE_PUBLIC_URL'),
+            'endpoint' => env('CONTABO_OBJECT_STORAGE_ENDPOINT', 'https://usc1.contabostorage.com'),
+            'use_path_style_endpoint' => env('CONTABO_OBJECT_STORAGE_USE_PATH_STYLE_ENDPOINT', true),
+            'visibility' => env('CONTABO_OBJECT_STORAGE_VISIBILITY', 'public'),
+            'throw' => false,
+            'report' => false,
+        ],
+
     ],
 
     /*

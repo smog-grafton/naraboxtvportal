@@ -9,11 +9,26 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
 use GuzzleHttp\Client as GuzzleClient;
 
+/**
+ * @group Player & Downloads
+ *
+ * Download file by download source id (from player response). Access: free or user has purchase/rental/subscription. Optional: Authorization header or ?access_token=.
+ */
 class DownloadController extends Controller
 {
+    private function restrictedPayload(): array
+    {
+        return [
+            'code' => 'CONTENT_RESTRICTED',
+            'status' => 'dmca_removed',
+            'title' => 'Content unavailable',
+            'message' => 'This title has been restricted following a copyright or compliance request received by NaraboxTV. We take intellectual property and platform safety seriously and review all reports in accordance with our compliance process.',
+            'actions' => ['copyright_policy', 'contact_support'],
+        ];
+    }
+
     /**
-     * Download a file from a download source
-     * This ensures proper headers and access control
+     * Download file. id = download source id. Auth optional for free content; required for paid. Supports ?access_token= for direct links.
      */
     public function download(Request $request, $id)
     {
@@ -37,6 +52,11 @@ class DownloadController extends Controller
             return response()->json([
                 'error' => 'Content not found',
             ], 404);
+        }
+
+        // Platform-level restriction (DMCA/compliance). Do not serve downloads.
+        if (($downloadable->content_status ?? 'published') === 'dmca_removed') {
+            return response()->json($this->restrictedPayload(), 403);
         }
 
         // Resolve user from Bearer token (route has no auth middleware)
@@ -119,23 +139,23 @@ class DownloadController extends Controller
      */
     private function serveFile(DownloadSource $downloadSource)
     {
-        // PRIORITY 1: If type is 'url' or URL field exists, stream from URL so browser gets Content-Disposition: attachment
+        // PRIORITY 1: If type is 'url' or URL field exists, proxy the URL so the browser
+        // receives Content-Disposition: attachment instead of opening the media player.
         if ($downloadSource->type === 'url' || !empty($downloadSource->url)) {
             $url = $downloadSource->url;
             if ($url) {
                 if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
                     $url = 'https://' . $url;
                 }
-                $url = $this->normalizeRemoteUrl($url);
-                return redirect()->away($this->toBrowserDownloadUrl($url));
+                return $this->streamRemoteUrl($url, $downloadSource);
             }
         }
 
-        // PRIORITY 2: file_path as URL – stream instead of redirect
+        // PRIORITY 2: file_path as URL - proxy instead of redirecting to a streamable URL.
         if (!empty($downloadSource->file_path)) {
             $filePath = $downloadSource->file_path;
             if (str_starts_with($filePath, 'http://') || str_starts_with($filePath, 'https://')) {
-                return redirect()->away($this->toBrowserDownloadUrl($this->normalizeRemoteUrl($filePath)));
+                return $this->streamRemoteUrl($filePath, $downloadSource);
             }
         }
 
@@ -180,8 +200,7 @@ class DownloadController extends Controller
                 $relativePath = ltrim($downloadSource->file_path, '/');
                 $fullUrl = $this->normalizeRemoteUrl(rtrim($baseUrl, '/') . '/' . $relativePath);
                 
-                // Try to verify URL is accessible (optional check)
-                return redirect($fullUrl, 302);
+                return $this->streamRemoteUrl($fullUrl, $downloadSource);
             }
             
             return response()->json([
@@ -334,39 +353,4 @@ class DownloadController extends Controller
         return $urlHost !== '' && $cdnHost !== '' && strcasecmp($urlHost, $cdnHost) === 0;
     }
 
-    private function toBrowserDownloadUrl(string $url): string
-    {
-        if (! $this->isCdnUrl($url)) {
-            return $url;
-        }
-
-        $parts = parse_url($url);
-        if (!is_array($parts)) {
-            return $url;
-        }
-
-        $query = [];
-        parse_str((string) ($parts['query'] ?? ''), $query);
-        $query['download'] = '1';
-
-        $scheme = (string) ($parts['scheme'] ?? 'https');
-        $host = (string) ($parts['host'] ?? '');
-        if ($host === '') {
-            return $url;
-        }
-
-        $rebuilt = $scheme . '://' . $host;
-        if (isset($parts['port'])) {
-            $rebuilt .= ':' . $parts['port'];
-        }
-
-        $rebuilt .= (string) ($parts['path'] ?? '/');
-        $rebuilt .= '?' . http_build_query($query);
-
-        if (isset($parts['fragment']) && $parts['fragment'] !== '') {
-            $rebuilt .= '#' . $parts['fragment'];
-        }
-
-        return $rebuilt;
-    }
 }

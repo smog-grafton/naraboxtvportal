@@ -17,7 +17,9 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
-            $table->foreignId('role_id')->nullable()->constrained('roles')->onDelete('set null');
+            // role_id is added by 2025_12_27_181318_add_role_to_users_table.php, which runs
+            // after 2025_12_27_181315_create_roles_table.php — the `roles` table doesn't
+            // exist yet at this point in migration order, so the FK can't be created here.
             $table->string('phone')->nullable();
             $table->string('avatar')->nullable();
             $table->enum('plan', ['FREE', 'PRO', 'ELITE'])->default('FREE');

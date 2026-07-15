@@ -14,7 +14,15 @@ class Season extends Model
         'number',
         'title',
         'description',
+        'air_date',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'air_date' => 'date',
+        ];
+    }
 
     public function tvShow(): BelongsTo
     {

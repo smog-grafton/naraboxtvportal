@@ -15,8 +15,59 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
+/**
+ * @group Payments
+ *
+ * PawaPay: initiate deposit (phone, provider MTN_MOMO_UGA|AIRTEL_OAPI_UGA), check deposit status. Webhooks for callbacks.
+ */
 class PawaPayController extends Controller
 {
+    /**
+     * Initiate PawaPay deposit
+     *
+     * Starts a PawaPay mobile money deposit for rent, buy, or subscription.
+     *
+     * Behaviour:
+     * - Normalizes the MSISDN to `2567XXXXXXXX`
+     * - Creates a `payment_transactions` row with an external `deposit_id`
+     * - Calls PawaPay’s deposit API and persists the initial provider status
+     *
+     * Frontend should:
+     * - Call this endpoint when PawaPay is chosen
+     * - Then poll `GET /api/v1/payments/pawapay/deposit/{depositId}/status`
+     *   (where `depositId` is returned here)
+     *
+     * @authenticated
+     *
+     * @bodyParam type string required One of `RENT`, `BUY`, `SUBSCRIPTION`. Example: SUBSCRIPTION
+     * @bodyParam media_id integer required_if:type,RENT,BUY The movie/TV show id for rent/buy. Example: 1
+     * @bodyParam media_type string required_if:type,RENT,BUY Must be `MOVIE` or `TV_SHOW`. Example: MOVIE
+     * @bodyParam subscription_plan_id integer required_if:type,SUBSCRIPTION The subscription plan id. Example: 3
+     * @bodyParam phone string required Uganda phone (07XXXXXXXX, 7XXXXXXXX, +2567XXXXXXXX or 2567XXXXXXXX). Example: 0770000000
+     * @bodyParam provider string required PawaPay provider code. One of `MTN_MOMO_UGA`, `AIRTEL_OAPI_UGA`. Example: MTN_MOMO_UGA
+     * @bodyParam currency string required Three-letter currency code (eg. `UGX`). Example: UGX
+     * @bodyParam deposit_id string uuid nullable Optional client-generated deposit UUID. Example: a232abbe-3006-3f67-bed4-124abab91dce
+     * @bodyParam client_reference_id string nullable Optional client reference id echoed back in provider callbacks. Example: mobile-app-checkout-123
+     *
+     * @response 200 {
+     *  "success": true,
+     *  "transaction_id": 501,
+     *  "deposit_id": "a232abbe-3006-3f67-bed4-124abab91dce",
+     *  "transaction_ref": "NBX-PWP-ABC123XYZ0-1710240000",
+     *  "status": "PENDING",
+     *  "message": "Deposit initiated. Check your phone to approve payment."
+     * }
+     *
+     * @response 400 {
+     *  "error": "PawaPay gateway is not available"
+     * }
+     *
+     * @response 422 {
+     *  "success": false,
+     *  "status": "FAILED",
+     *  "message": "Invalid phone number. Use 07XXXXXXXX, 7XXXXXXXX, +2567XXXXXXXX or 2567XXXXXXXX."
+     * }
+     */
     public function initiateDeposit(Request $request, PawaPayService $pawaPayService)
     {
         $user = Auth::user();
@@ -148,6 +199,39 @@ class PawaPayController extends Controller
         ]);
     }
 
+    /**
+     * Check PawaPay deposit status
+     *
+     * Polls the latest PawaPay status for a given `depositId`.
+     *
+     * Normalized statuses:
+     * - `COMPLETED`
+     * - `FAILED`
+     * - `PENDING`
+     *
+     * On `COMPLETED`, `PaymentApprovalService::grantAccess()` has already
+     * been called by the provider result handler.
+     *
+     * @authenticated
+     *
+     * @urlParam depositId string required The PawaPay deposit identifier returned from initiate. Example: a232abbe-3006-3f67-bed4-124abab91dce
+     *
+     * @response 200 {
+     *  "success": true,
+     *  "transaction_id": 501,
+     *  "deposit_id": "a232abbe-3006-3f67-bed4-124abab91dce",
+     *  "status": "COMPLETED",
+     *  "message": null
+     * }
+     *
+     * @response 404 {
+     *  "error": "Transaction not found"
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
+     */
     public function checkDepositStatus(Request $request, string $depositId, PawaPayService $pawaPayService)
     {
         $user = Auth::user();
@@ -186,6 +270,17 @@ class PawaPayController extends Controller
         ]);
     }
 
+    /**
+     * PawaPay deposit webhook
+     *
+     * Called by PawaPay when a deposit changes status. This endpoint:
+     * - Verifies the callback signature (when enabled)
+     * - Stores the raw callback body
+     * - Performs a server-to-server status check with PawaPay
+     * - Updates the `payment_transactions` row and grants access on success
+     *
+     * This is not intended for frontend use.
+     */
     public function depositWebhook(Request $request, PawaPayService $pawaPayService)
     {
         if (! $this->verifyCallbackSignature($request)) {
@@ -223,6 +318,12 @@ class PawaPayController extends Controller
         return response()->json(['status' => 'ok']);
     }
 
+    /**
+     * PawaPay refund webhook (placeholder)
+     *
+     * Currently returns a 202 “disabled” response. Once refunds are implemented,
+     * this can be wired to update transactions when provider-initiated refunds occur.
+     */
     public function refundWebhook()
     {
         return response()->json([

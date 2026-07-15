@@ -12,11 +12,15 @@ class ArticleBlock extends Model
         'type',
         'value',
         'caption',
+        'alt_text',
         'author',
         'author_title',
-        'alt_text',
-        'image_file',
         'gallery_images',
+        'movie_id',
+        'tv_show_id',
+        'vj_id',
+        'cta_label',
+        'cta_url',
         'order',
     ];
 
@@ -30,5 +34,20 @@ class ArticleBlock extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(Article::class);
+    }
+
+    public function movie(): BelongsTo
+    {
+        return $this->belongsTo(Movie::class);
+    }
+
+    public function tvShow(): BelongsTo
+    {
+        return $this->belongsTo(TVShow::class, 'tv_show_id');
+    }
+
+    public function vj(): BelongsTo
+    {
+        return $this->belongsTo(VJ::class);
     }
 }

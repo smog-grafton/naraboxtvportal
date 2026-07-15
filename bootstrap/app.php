@@ -16,16 +16,25 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(prepend: [
             \App\Http\Middleware\HandleCors::class,
         ]);
-        
+
+        $middleware->api(append: [
+            \App\Http\Middleware\TrackOnlinePresence::class,
+        ]);
+
         // Also add CORS to web routes for storage files
         $middleware->web(prepend: [
             \App\Http\Middleware\HandleCors::class,
         ]);
-        
+
+        $middleware->web(append: [
+            \App\Http\Middleware\TrackOnlinePresence::class,
+        ]);
+
         // Register middleware aliases
         $middleware->alias([
             'email.verified' => \App\Http\Middleware\EnsureEmailVerified::class,
             'worker.api' => \App\Http\Middleware\AuthenticateWorkerApi::class,
+            'app.api_key' => \App\Http\Middleware\ValidateApiKey::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

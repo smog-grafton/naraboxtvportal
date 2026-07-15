@@ -78,7 +78,7 @@ class EmailService
      */
     public static function sendWelcome(string $to, string $name): bool
     {
-        return self::send($to, 'welcome', ['name' => $name]);
+        return self::send($to, 'welcome', ['name' => $name, 'user_name' => $name]);
     }
 
     /**
@@ -86,6 +86,10 @@ class EmailService
      */
     public static function sendPaymentSuccess(string $to, array $paymentData): bool
     {
+        if (isset($paymentData['name']) && ! isset($paymentData['user_name'])) {
+            $paymentData['user_name'] = $paymentData['name'];
+        }
+
         return self::send($to, 'payment_success', $paymentData);
     }
 }

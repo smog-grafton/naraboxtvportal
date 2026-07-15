@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use App\Models\PlaybackMarker;
 use App\Models\Subtitle;
 
 class Episode extends Model
@@ -50,5 +51,10 @@ class Episode extends Model
     public function subtitles(): MorphMany
     {
         return $this->morphMany(Subtitle::class, 'subtitleable');
+    }
+
+    public function playbackMarkers(): MorphMany
+    {
+        return $this->morphMany(PlaybackMarker::class, 'markerable');
     }
 }

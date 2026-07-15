@@ -14,6 +14,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 
+/**
+ * @group Payments
+ *
+ * ioTec Pay: initiate (in-site phone prompt), status (poll by transaction_ref). Webhook for callback.
+ */
 class IoTeCController extends Controller
 {
     /**
@@ -44,7 +49,46 @@ class IoTeCController extends Controller
     }
 
     /**
-     * Initiate ioTec Pay collection (phone prompt, in-site).
+     * Initiate ioTec Pay collection (phone prompt, in-site)
+     *
+     * Starts an **in-app** mobile money collection via ioTec Pay:
+     * - Validates phone number format for Uganda
+     * - Creates a `payment_transactions` row with provider_code `IOTEC`
+     * - Sends a mobile money prompt to the user’s phone
+     *
+     * Frontend should:
+     * - Call this endpoint when the user chooses ioTec Pay
+     * - Then poll `POST /api/v1/iotec/status` with the returned `transaction_ref`
+     *
+     * `type` and amount rules are identical to `/payments/initiate`.
+     *
+     * @authenticated
+     *
+     * @bodyParam type string required One of `RENT`, `BUY`, `SUBSCRIPTION`. Example: SUBSCRIPTION
+     * @bodyParam media_id integer required_if:type,RENT,BUY The movie/TV show id for rent/buy. Example: 1
+     * @bodyParam media_type string required_if:type,RENT,BUY Must be `MOVIE` or `TV_SHOW`. Example: MOVIE
+     * @bodyParam subscription_plan_id integer required_if:type,SUBSCRIPTION The subscription plan id. Example: 3
+     * @bodyParam phone string required Uganda phone in `2567XXXXXXXX` or `07XXXXXXXX` format. Example: 256780000000
+     * @bodyParam return_url string nullable Relative or same-origin URL to redirect to after success (eg. `/dashboard`). Example: /dashboard
+     *
+     * @response 200 {
+     *  "transaction_ref": "NBX-IOT-ABC123XYZ0-1710240000",
+     *  "payment_id": 101,
+     *  "status": "PENDING",
+     *  "message": "Prompt sent to 25678*****000"
+     * }
+     *
+     * @response 400 {
+     *  "error": "ioTec Pay gateway is not available"
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
+     *
+     * @response 422 {
+     *  "error": "Invalid Uganda phone number. Use 256XXXXXXXXX or 0XXXXXXXXX."
+     * }
      */
     public function initiate(Request $request)
     {
@@ -141,7 +185,43 @@ class IoTeCController extends Controller
     }
 
     /**
-     * Poll payment status. Returns status and redirect_url on success.
+     * Poll ioTec Pay payment status
+     *
+     * Polls the current status of an ioTec payment created via `POST /iotec/initiate`.
+     *
+     * Normalized statuses:
+     * - `success`   → payment completed, access granted, `redirect_url` provided
+     * - `failed`    → permanently failed (insufficient funds, timeout, etc.)
+     * - `pending`   → still waiting for user/network confirmation
+     *
+     * @authenticated
+     *
+     * @bodyParam transaction_ref string The `transaction_ref` from `/iotec/initiate`. Example: NBX-IOT-ABC123XYZ0-1710240000
+     * @bodyParam payment_id integer The internal `payment_transactions.id` (alternative to transaction_ref). Example: 101
+     *
+     * @response 200 scenario="Success" {
+     *  "status": "success",
+     *  "redirect_url": "/dashboard"
+     * }
+     *
+     * @response 200 scenario="Failed" {
+     *  "status": "failed",
+     *  "redirect_url": "/dashboard",
+     *  "message": "Payment failed"
+     * }
+     *
+     * @response 200 scenario="Pending" {
+     *  "status": "pending",
+     *  "message": "Waiting for confirmation"
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
+     *
+     * @response 404 {
+     *  "error": "Transaction not found"
+     * }
      */
     public function status(Request $request)
     {
@@ -219,7 +299,15 @@ class IoTeCController extends Controller
     }
 
     /**
-     * Webhook for ioTec callbacks (configure callback URL in ioTec wallet settings).
+     * ioTec webhook callback
+     *
+     * Called server-to-server by ioTec when a transaction changes status.
+     * This endpoint:
+     * - Locates the corresponding `payment_transactions` row
+     * - Updates its status to `SUCCESS` or `FAILED`
+     * - Grants access on success via `PaymentApprovalService::grantAccess()`
+     *
+     * You normally do **not** call this from the frontend.
      */
     public function webhook(Request $request)
     {

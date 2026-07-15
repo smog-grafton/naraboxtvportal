@@ -6,10 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\Movie;
 use Illuminate\Http\Request;
 
+/**
+ * @group Access & Views
+ *
+ * Track play views. Body: media_id, media_type (MOVIE|TV_SHOW). Public.
+ */
 class ViewController extends Controller
 {
     /**
-     * Track a view for a movie or TV show
+     * Track a view. Body: media_id, media_type (MOVIE|TV_SHOW).
      */
     public function track(Request $request)
     {

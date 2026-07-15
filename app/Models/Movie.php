@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -11,6 +12,8 @@ use Illuminate\Support\Str;
 
 class Movie extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'title',
         'slug',
@@ -37,6 +40,8 @@ class Movie extends Model
         'featured_order',
         'download_enabled',
         'is_active',
+        // Platform content lifecycle
+        'content_status',
         // TMDB fields
         'tmdb_id',
         'imdb_id',
@@ -51,6 +56,10 @@ class Movie extends Model
         'production_companies',
         'production_countries',
         'collection_id',
+        // Creator ownership
+        'media_library_id',
+        'cdn_asset_id',
+        'publish_status',
     ];
 
     protected function casts(): array
@@ -65,6 +74,7 @@ class Movie extends Model
             'is_featured' => 'boolean',
             'download_enabled' => 'boolean',
             'is_active' => 'boolean',
+            'content_status' => 'string',
             'budget' => 'integer',
             'revenue' => 'integer',
             'popularity' => 'decimal:2',
@@ -72,6 +82,16 @@ class Movie extends Model
             'production_companies' => 'array',
             'production_countries' => 'array',
         ];
+    }
+
+    public function isDmcaRemoved(): bool
+    {
+        return $this->content_status === 'dmca_removed';
+    }
+
+    public function scopePubliclyVisible(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->whereIn('content_status', ['published']);
     }
 
     protected static function boot()
@@ -121,6 +141,11 @@ class Movie extends Model
     public function vj(): BelongsTo
     {
         return $this->belongsTo(VJ::class);
+    }
+
+    public function mediaLibrary(): BelongsTo
+    {
+        return $this->belongsTo(MediaLibrary::class);
     }
 
     public function genres(): BelongsToMany
@@ -198,5 +223,15 @@ class Movie extends Model
     public function subtitles(): MorphMany
     {
         return $this->morphMany(Subtitle::class, 'subtitleable');
+    }
+
+    public function playbackMarkers(): MorphMany
+    {
+        return $this->morphMany(PlaybackMarker::class, 'markerable');
+    }
+
+    public function dmcaNotices(): HasMany
+    {
+        return $this->hasMany(DmcaNotice::class, 'content_id')->where('content_type', 'MOVIE');
     }
 }

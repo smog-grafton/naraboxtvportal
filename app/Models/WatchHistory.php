@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Models\TVShow;
 
 class WatchHistory extends Model
 {
@@ -12,6 +13,7 @@ class WatchHistory extends Model
     protected $fillable = [
         'user_id',
         'media_id',
+        'media_type',
         'episode_id',
         'progress_seconds',
         'total_seconds',
@@ -22,6 +24,7 @@ class WatchHistory extends Model
     {
         return [
             'last_watched_at' => 'datetime',
+            'media_type' => 'string',
         ];
     }
 
@@ -33,6 +36,11 @@ class WatchHistory extends Model
     public function media(): BelongsTo
     {
         return $this->belongsTo(Movie::class, 'media_id');
+    }
+
+    public function tvShow(): BelongsTo
+    {
+        return $this->belongsTo(TVShow::class, 'media_id');
     }
 
     public function episode(): BelongsTo

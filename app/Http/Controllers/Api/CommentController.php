@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\CommentCreated;
+use App\Events\CommentReplyCreated;
 use App\Http\Controllers\Controller;
 use App\Models\Comment;
 use App\Models\Movie;
@@ -9,10 +11,15 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 
+/**
+ * @group Comments
+ *
+ * Comments on media (media_id = movie id). List (public), add (auth or anonymous with user_name), like, delete (auth, own).
+ */
 class CommentController extends Controller
 {
     /**
-     * Get comments for a specific media item
+     * Get comments for a media item. Public. mediaId = movies.id.
      */
     public function index(Request $request, $mediaId)
     {
@@ -78,6 +85,12 @@ class CommentController extends Controller
 
         // Load relationships
         $comment->load(['replies']);
+
+        if ($comment->parent_id) {
+            event(new CommentReplyCreated($comment));
+        } else {
+            event(new CommentCreated($comment));
+        }
 
         return response()->json([
             'success' => true,
@@ -146,4 +159,3 @@ class CommentController extends Controller
         ];
     }
 }
-

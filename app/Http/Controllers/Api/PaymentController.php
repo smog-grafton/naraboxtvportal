@@ -10,15 +10,48 @@ use App\Models\Movie;
 use App\Models\TVShow;
 use App\Models\SubscriptionPlan;
 use App\Services\PaymentApprovalService;
+use App\Services\PendingPaymentResolverService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
+/**
+ * @group Payments
+ *
+ * Payment gateways (list), initiate payment (rent/buy/subscription), upload proof (manual), verify.
+ */
 class PaymentController extends Controller
 {
+    public function __construct(
+        private readonly PendingPaymentResolverService $pendingPaymentResolver,
+    ) {
+    }
+
     /**
      * Get all active payment gateways
+     *
+     * Public list of configured payment gateways. Use this to render the
+     * “Choose payment method” UI.
+     *
+     * Gateways can be:
+     * - `type = AUTOMATIC` (eg. ioTec Pay, PawaPay)
+     * - `type = MANUAL` (bank transfer / manual mobile money with proof upload)
+     *
+     * @response 200 [{
+     *  "id": 7,
+     *  "name": "ioTec Pay",
+     *  "slug": "iotec",
+     *  "code": "iotec",
+     *  "displayName": "Mobile Money - Iotec",
+     *  "display_name": "Mobile Money - Iotec",
+     *  "logoPath": "payment-gateways/01KJZWAK4P244CXYXF0NQE7QDX.jpeg",
+     *  "logoUrl": "https://portal.naraboxtv.com/storage/payment-gateways/01KJZWAK4P244CXYXF0NQE7QDX.jpeg",
+     *  "helperText": null,
+     *  "type": "AUTOMATIC",
+     *  "instructions": null,
+     *  "paymentDetails": null
+     * }]
      */
     public function gateways()
     {
@@ -26,7 +59,15 @@ class PaymentController extends Controller
             ->orderBy('sort_order')
             ->get()
             ->map(function ($gateway) {
-                $logoUrl = $gateway->logo_path ? url(Storage::url($gateway->logo_path)) : null;
+                $logoUrl = null;
+                if (! empty($gateway->logo_path)) {
+                    $path = $gateway->logo_path;
+                    if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+                        $logoUrl = $path;
+                    } else {
+                        $logoUrl = url(Storage::url($path));
+                    }
+                }
 
                 return [
                     'id' => $gateway->id,
@@ -35,12 +76,16 @@ class PaymentController extends Controller
                     'code' => $gateway->code,
                     'displayName' => $gateway->display_name,
                     'display_name' => $gateway->display_name,
+                    'description' => $gateway->description,
                     'logoPath' => $gateway->logo_path,
                     'logoUrl' => $logoUrl,
+                    'logo' => $logoUrl,
                     'helperText' => $gateway->helper_text,
+                    'helper_text' => $gateway->helper_text,
                     'type' => $gateway->type,
                     'instructions' => $gateway->instructions,
                     'paymentDetails' => $gateway->payment_details,
+                    'is_active' => (bool) $gateway->is_active,
                 ];
             });
 
@@ -49,6 +94,57 @@ class PaymentController extends Controller
 
     /**
      * Initiate a payment (rent, buy, or subscription)
+     *
+     * Creates a `payment_transactions` row and returns a `transaction_ref`
+     * that the frontend can use with the appropriate gateway flow.
+     *
+     * For **manual** gateways:
+     * - Returns bank/mobile-money instructions and `paymentDetails`
+     * - Frontend must call `POST /api/v1/payments/upload-proof` afterwards
+     *
+     * For **automatic** gateways:
+     * - Returns a generic “PENDING” status and `transaction_ref`
+     * - The actual collection happens via gateway-specific endpoints
+     *   (eg. ioTec, PawaPay) or external UIs.
+     *
+     * @authenticated
+     *
+     * @bodyParam type string required One of `RENT`, `BUY`, `SUBSCRIPTION`. Example: RENT
+     * @bodyParam media_id integer required_if:type,RENT,BUY The movie/TV show id for rent/buy. Example: 1
+     * @bodyParam media_type string required_if:type,RENT,BUY Must be `MOVIE` or `TV_SHOW`. Example: MOVIE
+     * @bodyParam gateway_id integer required The `id` of the selected payment gateway. Example: 3
+     * @bodyParam subscription_plan_id integer required_if:type,SUBSCRIPTION The `id` of the subscription plan. Example: 2
+     * @bodyParam phone string nullable Phone number (used by some mobile money gateways). Example: 256780000000
+     *
+     * @response 200 scenario="Manual gateway" {
+     *  "transaction_ref": "NBX-3Y7Z5K0PQ8LM",
+     *  "amount": 1000,
+     *  "status": "PENDING",
+     *  "gateway_type": "MANUAL",
+     *  "instructions": "Send UGX 1,000 to MTN 0770 000 000 and include your transaction_ref in the note.",
+     *  "payment_details": {
+     *    "account_name": "NaraBox TV",
+     *    "account_number": "0770000000",
+     *    "provider": "MTN MoMo"
+     *  },
+     *  "message": "Please follow the instructions and upload proof of payment"
+     * }
+     *
+     * @response 200 scenario="Automatic gateway" {
+     *  "transaction_ref": "NBX-5K8LM3Y7Z0PQ",
+     *  "amount": 8500,
+     *  "status": "PENDING",
+     *  "gateway_type": "AUTOMATIC",
+     *  "message": "Payment initiated. Please complete on your device."
+     * }
+     *
+     * @response 400 {
+     *  "error": "Invalid amount"
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
      */
     public function initiate(Request $request)
     {
@@ -130,6 +226,33 @@ class PaymentController extends Controller
 
     /**
      * Upload payment proof for manual payments
+     *
+     * After a manual payment (bank or mobile money), the user uploads a screenshot
+     * or PDF. Admins then review and approve/reject in the back office.
+     *
+     * This endpoint:
+     * - Stores the file under `storage/app/public/payment-proofs`
+     * - Creates a `payments` row with status `PENDING`
+     *
+     * @authenticated
+     *
+     * @bodyParam transaction_ref string required The `transaction_ref` returned from `/payments/initiate`. Example: NBX-3Y7Z5K0PQ8LM
+     * @bodyParam proof file required Image or PDF file up to 10MB. Must be jpeg, jpg, png, or pdf.
+     * @bodyParam notes string nullable Optional notes from the user. Max 1000 characters. Example: Paid using MTN at 10:32pm.
+     *
+     * @response 200 {
+     *  "success": true,
+     *  "message": "Payment proof uploaded. Waiting for admin approval.",
+     *  "payment_id": 42
+     * }
+     *
+     * @response 400 {
+     *  "error": "Transaction is not pending"
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
      */
     public function uploadProof(Request $request)
     {
@@ -174,6 +297,46 @@ class PaymentController extends Controller
 
     /**
      * Verify payment (for automatic gateways)
+     *
+     * Frontend helper to confirm if a payment has been completed and access granted.
+     *
+     * Behaviour:
+     * - For **manual** gateways: checks the related `payments` record and returns:
+     *   - `APPROVED` when admin has approved (and access has been granted)
+     *   - `REJECTED` when admin rejected
+     *   - `PENDING` while awaiting review
+     * - For **automatic** gateways: currently simulates a success and calls
+     *   `PaymentApprovalService::grantAccess()`. In production, this should
+     *   be wired to the real provider status API.
+     *
+     * @authenticated
+     *
+     * @bodyParam transaction_ref string required The `transaction_ref` to verify. Example: NBX-3Y7Z5K0PQ8LM
+     *
+     * @response 200 scenario="Manual gateway approved" {
+     *  "success": true,
+     *  "status": "APPROVED",
+     *  "message": "Payment approved. Access granted."
+     * }
+     *
+     * @response 200 scenario="Manual gateway pending" {
+     *  "success": false,
+     *  "status": "PENDING",
+     *  "message": "Payment is pending admin approval"
+     * }
+     *
+     * @response 200 scenario="Automatic gateway success" {
+     *  "success": true,
+     *  "transaction": {
+     *    "ref": "NBX-5K8LM3Y7Z0PQ",
+     *    "status": "SUCCESS",
+     *    "type": "RENT"
+     *  }
+     * }
+     *
+     * @response 401 {
+     *  "error": "Unauthorized"
+     * }
      */
     public function verify(Request $request)
     {
@@ -223,14 +386,42 @@ class PaymentController extends Controller
             ]);
         }
 
-        // For automatic gateways, verify with payment provider
-        // This is a placeholder - in production, integrate with actual gateway
-        $transaction->update([
-            'status' => 'SUCCESS',
-            'gateway_transaction_id' => 'GW-' . Str::random(10),
-        ]);
+        if ($transaction->status === 'SUCCESS') {
+            return response()->json([
+                'success' => true,
+                'transaction' => [
+                    'ref' => $transaction->transaction_ref,
+                    'status' => $transaction->status,
+                    'type' => $transaction->type,
+                ],
+            ]);
+        }
 
-        PaymentApprovalService::grantAccess($transaction);
+        if ($transaction->status === 'FAILED') {
+            return response()->json([
+                'success' => false,
+                'status' => 'FAILED',
+                'message' => $transaction->failure_reason ?? 'Payment failed.',
+            ], 400);
+        }
+
+        $transaction = $this->pendingPaymentResolver->resolve($transaction);
+
+        if ($transaction->status === 'FAILED') {
+            return response()->json([
+                'success' => false,
+                'status' => 'FAILED',
+                'message' => $transaction->failure_reason ?? 'Payment failed.',
+            ], 400);
+        }
+
+        if ($transaction->status !== 'SUCCESS') {
+            return response()->json([
+                'success' => false,
+                'status' => 'PENDING',
+                'message' => 'Payment is still being confirmed. Please give it a moment.',
+            ], 202);
+        }
 
         return response()->json([
             'success' => true,
