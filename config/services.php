@@ -49,6 +49,10 @@ return [
         'currency' => env('FLW_CURRENCY', 'UGX'),
     ],
 
+    'iotec' => [
+        'card_enabled' => (bool) env('IOTEC_CARD_ENABLED', true),
+    ],
+
     'pawapay' => [
         'env' => env('PAWAPAY_ENV', 'sandbox'),
         'base_url' => env('PAWAPAY_BASE_URL', 'https://api.sandbox.pawapay.io'),

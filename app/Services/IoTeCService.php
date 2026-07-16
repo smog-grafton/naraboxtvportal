@@ -183,6 +183,91 @@ class IoTeCService
     }
 
     /**
+     * Initiate a card (Visa/MasterCard) collection via ioTec's PegPay-hosted redirect flow.
+     * Amount in UGX, min 500. Customer completes entry on ioTec's hosted form; Narabox never
+     * touches card details. Returns ['request_id', 'status', 'card_redirect_url', 'raw'] or ['error'].
+     */
+    public function collectCard(
+        string $transactionRef,
+        float $amount,
+        string $payerEmail,
+        ?string $payerName,
+        string $redirectUrl,
+        ?string $payerNote = null,
+        ?string $payeeNote = null
+    ): array {
+        $token = $this->getAccessToken();
+        if (! $token) {
+            return ['error' => 'Failed to obtain ioTec access token'];
+        }
+
+        $amountInt = (int) round($amount);
+        if ($amountInt < 500) {
+            return ['error' => 'Amount must be at least 500 UGX'];
+        }
+
+        if (! filter_var($payerEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['error' => 'Invalid email address'];
+        }
+
+        if ($this->walletId === null || $this->walletId === '') {
+            return ['error' => 'ioTec Wallet ID is not configured. Please set it in Admin → Payment Gateways → ioTec Pay.'];
+        }
+
+        // The public PaymentCategory enum in ioTec's OpenAPI doc (MobileMoney|WalletToWallet|
+        // BankTransfer) does not list "Card" - that's a stale/incomplete doc, not the real
+        // contract. Confirmed empirically against the live API (2026-07-16): omitting `category`
+        // makes ioTec default to MSISDN validation, rejecting an email payer with "Invalid Payer
+        // <email>". Sending `category: "Card"` (exact case) is required and returns a working
+        // `cardRedirectUrl` + `vendor: Visa/MasterCard`.
+        $payload = [
+            'amount' => $amountInt,
+            'payer' => $payerEmail,
+            'payerName' => $payerName !== null && $payerName !== '' ? substr($payerName, 0, 150) : null,
+            'externalId' => $transactionRef,
+            'currency' => 'UGX',
+            'walletId' => $this->walletId,
+            'redirectUrl' => $redirectUrl,
+            'category' => 'Card',
+        ];
+        if ($payerNote !== null && $payerNote !== '') {
+            $payload['payerNote'] = substr($payerNote, 0, 100);
+        }
+        if ($payeeNote !== null && $payeeNote !== '') {
+            $payload['payeeNote'] = substr($payeeNote, 0, 100);
+        }
+        $payload = array_filter($payload, fn ($v) => $v !== null);
+
+        $response = Http::withToken($token)
+            ->acceptJson()
+            ->post($this->payBaseUrl . '/api/collections/collect', $payload);
+
+        $data = $response->json();
+        if (! $response->successful()) {
+            Log::warning('ioTec card collect failed', [
+                'status' => $response->status(),
+                'external_id' => $transactionRef,
+            ]);
+            return [
+                'error' => $data['error'] ?? $data['message'] ?? $response->body() ?: 'Card collect request failed',
+            ];
+        }
+
+        $requestId = $data['id'] ?? null;
+        if (! $requestId) {
+            return ['error' => 'No request id in ioTec response'];
+        }
+
+        return [
+            'request_id' => $requestId,
+            'status' => $data['status'] ?? 'Pending',
+            'card_redirect_url' => $data['cardRedirectUrl'] ?? null,
+            'vendor' => $data['vendor'] ?? null,
+            'raw' => $data,
+        ];
+    }
+
+    /**
      * Get collection status. Returns normalized: pending | success | failed | cancelled | timeout.
      */
     public function getStatus(string $requestId): array

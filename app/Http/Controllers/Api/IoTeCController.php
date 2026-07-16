@@ -49,16 +49,19 @@ class IoTeCController extends Controller
     }
 
     /**
-     * Initiate ioTec Pay collection (phone prompt, in-site)
+     * Initiate ioTec Pay collection (mobile money prompt, or card via hosted redirect)
      *
-     * Starts an **in-app** mobile money collection via ioTec Pay:
-     * - Validates phone number format for Uganda
-     * - Creates a `payment_transactions` row with provider_code `IOTEC`
-     * - Sends a mobile money prompt to the user’s phone
+     * Starts a collection via ioTec Pay. Two methods are supported:
+     * - `mobile_money` (default, unchanged): in-app phone prompt, no redirect.
+     * - `card`: Visa/MasterCard via ioTec's PegPay-hosted form. Narabox collects only
+     *   the customer's name and email; the response's `card_redirect_url` must be opened
+     *   so the customer enters card details on ioTec's secure page, never in Narabox.
      *
      * Frontend should:
-     * - Call this endpoint when the user chooses ioTec Pay
-     * - Then poll `POST /api/v1/iotec/status` with the returned `transaction_ref`
+     * - Call this endpoint when the user chooses a payment method
+     * - For `mobile_money`: poll `POST /api/v1/iotec/status` with the returned `transaction_ref`
+     * - For `card`: open `card_redirect_url`, then poll the same status endpoint once the
+     *   provider redirects back — a redirect alone never grants access.
      *
      * `type` and amount rules are identical to `/payments/initiate`.
      *
@@ -68,7 +71,10 @@ class IoTeCController extends Controller
      * @bodyParam media_id integer required_if:type,RENT,BUY The movie/TV show id for rent/buy. Example: 1
      * @bodyParam media_type string required_if:type,RENT,BUY Must be `MOVIE` or `TV_SHOW`. Example: MOVIE
      * @bodyParam subscription_plan_id integer required_if:type,SUBSCRIPTION The subscription plan id. Example: 3
-     * @bodyParam phone string required Uganda phone in `2567XXXXXXXX` or `07XXXXXXXX` format. Example: 256780000000
+     * @bodyParam method string nullable `mobile_money` (default) or `card`. Example: card
+     * @bodyParam phone string required_if:method,mobile_money Uganda phone in `2567XXXXXXXX` or `07XXXXXXXX` format. Example: 256780000000
+     * @bodyParam payer_name string required_if:method,card Cardholder's full name. Example: John Doe
+     * @bodyParam payer_email string required_if:method,card Cardholder's email. Example: john@example.com
      * @bodyParam return_url string nullable Relative or same-origin URL to redirect to after success (eg. `/dashboard`). Example: /dashboard
      *
      * @response 200 {
@@ -97,12 +103,17 @@ class IoTeCController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
+        $method = $request->input('method', 'mobile_money') ?: 'mobile_money';
+
         $request->validate([
             'media_id' => 'required_if:type,RENT,BUY|integer',
             'media_type' => 'required_if:type,RENT,BUY|in:MOVIE,TV_SHOW',
             'type' => 'required|in:RENT,BUY,SUBSCRIPTION',
             'subscription_plan_id' => 'required_if:type,SUBSCRIPTION|exists:subscription_plans,id',
-            'phone' => 'required|string|max:20',
+            'method' => 'nullable|in:mobile_money,card',
+            'phone' => 'required_if:method,mobile_money|string|max:20',
+            'payer_name' => 'required_if:method,card|string|max:150',
+            'payer_email' => 'required_if:method,card|email|max:255',
             'return_url' => 'nullable|string|max:500',
         ]);
 
@@ -111,7 +122,17 @@ class IoTeCController extends Controller
             return response()->json(['error' => 'ioTec Pay gateway is not available'], 400);
         }
 
-        if (! IoTeCService::validatePhone($request->phone)) {
+        if ($method === 'card') {
+            // Admin → Payment Gateways → ioTec Pay → "Card payments enabled" is the day-to-day
+            // on/off switch (no deploy needed). services.iotec.card_enabled (env) is a secondary
+            // hard kill-switch that stays enforced even if the DB config is misconfigured.
+            $gatewayCardEnabled = (bool) ($gateway->config['card_enabled'] ?? true);
+            if (! $gatewayCardEnabled || ! config('services.iotec.card_enabled', true)) {
+                return response()->json(['error' => 'Card payments are not currently available'], 400);
+            }
+        }
+
+        if ($method === 'mobile_money' && ! IoTeCService::validatePhone($request->phone)) {
             return response()->json(['error' => 'Invalid Uganda phone number. Use 256XXXXXXXXX or 0XXXXXXXXX.'], 422);
         }
 
@@ -136,6 +157,10 @@ class IoTeCController extends Controller
 
         $returnUrl = $this->validateReturnUrl($request->return_url);
         $meta = $returnUrl ? ['return_url' => $returnUrl] : [];
+        if ($method === 'card') {
+            $meta['payer_email'] = $request->payer_email;
+            $meta['payer_name'] = $request->payer_name;
+        }
 
         $txRef = 'NBX-IOT-' . strtoupper(Str::random(10)) . '-' . time();
 
@@ -151,12 +176,22 @@ class IoTeCController extends Controller
             'amount' => $amount,
             'status' => 'PENDING',
             'meta' => $meta,
-            'provider_code' => 'IOTEC',
+            'provider_code' => $method === 'card' ? 'IOTEC_CARD' : 'IOTEC',
         ]);
 
         $service = new IoTeCService($gateway);
         $payerNote = $request->type === 'RENT' ? 'Rent: ' . ($transactionable?->title ?? '') : ($request->type === 'BUY' ? 'Buy: ' . ($transactionable?->title ?? '') : 'Subscription: ' . ($subscriptionPlan?->name ?? ''));
-        $result = $service->collect($txRef, (float) $amount, $request->phone, $payerNote, 'NaraBox');
+
+        if ($method === 'card') {
+            $frontendUrl = rtrim((string) config('app.frontend_url', env('FRONTEND_URL', 'http://localhost:3000')), '/');
+            $cardRedirectTarget = $frontendUrl . '/payment/callback?tx_ref=' . urlencode($txRef) . '&provider=iotec';
+            // ioTec/PegPay's hosted card form renders `payeeNote` as the "Item Description"
+            // line, not `payerNote` — pass the same title + purchase-type text to both so the
+            // customer sees what they're paying for instead of a generic "NaraBox".
+            $result = $service->collectCard($txRef, (float) $amount, $request->payer_email, $request->payer_name, $cardRedirectTarget, $payerNote, $payerNote);
+        } else {
+            $result = $service->collect($txRef, (float) $amount, $request->phone, $payerNote, 'NaraBox');
+        }
 
         if (isset($result['error'])) {
             $transaction->update([
@@ -174,6 +209,22 @@ class IoTeCController extends Controller
             'gateway_response' => $result['raw'] ?? $result,
             'raw_response' => $result['raw'] ?? $result,
         ]);
+
+        if ($method === 'card') {
+            if (empty($result['card_redirect_url'])) {
+                return response()->json(['error' => 'ioTec did not return a card redirect URL'], 502);
+            }
+            $transaction->update([
+                'meta' => array_merge($transaction->meta ?? [], ['card_redirect_url' => $result['card_redirect_url']]),
+            ]);
+            return response()->json([
+                'transaction_ref' => $txRef,
+                'payment_id' => $transaction->id,
+                'status' => 'PENDING',
+                'card_redirect_url' => $result['card_redirect_url'],
+                'message' => 'Redirecting to secure card payment form',
+            ]);
+        }
 
         $masked = IoTeCService::maskPhone($request->phone);
         return response()->json([

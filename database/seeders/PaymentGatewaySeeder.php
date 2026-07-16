@@ -99,6 +99,7 @@ class PaymentGatewaySeeder extends Seeder
                     'id_base_url' => env('IOTEC_ID_BASE_URL', 'https://id.iotec.io'),
                     'pay_base_url' => env('IOTEC_PAY_BASE_URL', 'https://pay.iotec.io'),
                     'wallet_id' => env('IOTEC_WALLET_ID', ''),
+                    'card_enabled' => true,
                 ],
             ]
         );

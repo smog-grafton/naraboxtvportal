@@ -170,6 +170,11 @@ class PaymentGatewayResource extends Resource
                             ->placeholder('5e83b187-801e-410e-b76e-f491928547e0')
                             ->helperText('ioTec Pay wallet UUID where collections are credited (required for collect). Find it in your ioTec Pay portal.')
                             ->visible(fn (Forms\Get $get) => $get('type') === 'AUTOMATIC' && $get('slug') === 'iotec'),
+                        Forms\Components\Toggle::make('config.card_enabled')
+                            ->label('Card payments enabled')
+                            ->default(true)
+                            ->helperText('Lets customers pay by Visa/MasterCard via ioTec\'s hosted card form, in addition to Mobile Money. Turn off to instantly disable Card checkout without a deploy.')
+                            ->visible(fn (Forms\Get $get) => $get('type') === 'AUTOMATIC' && $get('slug') === 'iotec'),
                         // PawaPay-specific fields
                         Forms\Components\Select::make('config.environment')
                             ->label('PawaPay Environment')
