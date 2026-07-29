@@ -9,13 +9,13 @@ use Symfony\Component\HttpFoundation\Response;
 class ValidateApiKey
 {
     /**
-    * Handle an incoming request.
-    */
+     * Handle an incoming request.
+     */
     public function handle(Request $request, Closure $next): Response
     {
         // Browsers can't reliably send custom headers (like X-API-KEY) for direct file
-        // downloads triggered via navigation/window.open. Download access control is
-        // already handled inside DownloadController (free/public vs paid + access_token).
+        // downloads. DownloadController requires entitlement authorization and issues
+        // short-lived signed links without exposing API keys or access tokens.
         if ($request->is('api/v1/downloads/*')) {
             return $next($request);
         }
@@ -28,7 +28,7 @@ class ValidateApiKey
         }
 
         // If API key protection is disabled or no key is configured, allow all.
-        if (!config('api.enabled')) {
+        if (! config('api.enabled')) {
             return $next($request);
         }
 
@@ -43,7 +43,7 @@ class ValidateApiKey
             ?: $request->header('X-API-KEY')
             ?: $request->header('X-Api-Key');
 
-        if (!$providedKey || !hash_equals($expectedKey, (string) $providedKey)) {
+        if (! $providedKey || ! hash_equals($expectedKey, (string) $providedKey)) {
             return response()->json([
                 'error' => 'Invalid or missing API key',
                 'code' => 'INVALID_API_KEY',
@@ -54,4 +54,3 @@ class ValidateApiKey
         return $next($request);
     }
 }
-

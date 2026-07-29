@@ -175,7 +175,9 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
     Route::post('/playback/sessions', [PlayerController::class, 'syncSession']);
     // Downloads (optional auth - allows free content downloads without login)
     // Removed auth:sanctum middleware - DownloadController handles access control internally
-    Route::get("/downloads/{id}", [\App\Http\Controllers\Api\DownloadController::class, "download"]);
+    Route::post('/downloads/{id}/authorize', [\App\Http\Controllers\Api\DownloadController::class, 'authorizeDownload']);
+    Route::get('/downloads/{id}', [\App\Http\Controllers\Api\DownloadController::class, 'download'])
+        ->name('downloads.file');
     
     // Payment gateways (public list)
     Route::get('/payment-gateways', [PaymentController::class, 'gateways']);

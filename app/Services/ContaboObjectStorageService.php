@@ -83,15 +83,27 @@ class ContaboObjectStorageService
             return rtrim($configured, '/');
         }
 
-        return $this->endpoint() . '/' . $this->bucket();
+        return $this->endpoint().'/'.$this->bucket();
     }
 
     public function isContaboPublicUrl(string $url): bool
     {
         $normalized = rtrim(trim($url), '/');
         $base = $this->publicBaseUrl();
+        if ($normalized === $base || str_starts_with($normalized, $base.'/')) {
+            return true;
+        }
 
-        return $normalized === $base || str_starts_with($normalized, $base . '/');
+        $urlHost = strtolower((string) parse_url($normalized, PHP_URL_HOST));
+        $endpointHost = strtolower((string) parse_url($this->endpoint(), PHP_URL_HOST));
+        if ($urlHost === '' || $endpointHost === '' || $urlHost !== $endpointHost) {
+            return false;
+        }
+
+        $firstSegment = explode('/', trim((string) parse_url($normalized, PHP_URL_PATH), '/'))[0] ?? '';
+        $bucket = $this->bucket();
+
+        return $firstSegment === $bucket || str_ends_with($firstSegment, ':'.$bucket);
     }
 
     public function objectKeyFromPublicUrl(string $url): ?string
@@ -101,7 +113,21 @@ class ContaboObjectStorageService
         }
 
         $base = $this->publicBaseUrl();
-        $key = ltrim(substr(trim($url), strlen($base)), '/');
+        if (rtrim(trim($url), '/') === $base || str_starts_with(trim($url), $base.'/')) {
+            $key = ltrim(substr(trim($url), strlen($base)), '/');
+
+            return $key !== '' ? rawurldecode($key) : null;
+        }
+
+        $segments = array_values(array_filter(explode('/', trim((string) parse_url($url, PHP_URL_PATH), '/'))));
+        if ($segments === []) {
+            return null;
+        }
+        $bucket = $this->bucket();
+        if ($segments[0] === $bucket || str_ends_with($segments[0], ':'.$bucket)) {
+            array_shift($segments);
+        }
+        $key = implode('/', $segments);
 
         return $key !== '' ? rawurldecode($key) : null;
     }
