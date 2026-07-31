@@ -10,6 +10,7 @@ use App\Models\SubscriptionPlan;
 use App\Models\TVShow;
 use App\Services\IoTeCService;
 use App\Services\PaymentApprovalService;
+use App\Services\WithdrawalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
@@ -360,8 +361,14 @@ class IoTeCController extends Controller
      *
      * You normally do **not** call this from the frontend.
      */
-    public function webhook(Request $request)
+    public function webhook(Request $request, WithdrawalService $withdrawals)
     {
+        $configuredToken = (string) config('services.iotec.webhook_token', '');
+        $providedToken = (string) ($request->header('X-Webhook-Token') ?: $request->bearerToken());
+        if ($configuredToken === '' || ! hash_equals($configuredToken, $providedToken)) {
+            return response()->json(['error' => 'Invalid webhook credentials'], 401);
+        }
+
         $payload = $request->all();
         $requestId = $payload['id'] ?? null;
         $externalId = $payload['externalId'] ?? null;
@@ -379,7 +386,24 @@ class IoTeCController extends Controller
             $transaction = PaymentTransaction::where('transaction_ref', $externalId)->first();
         }
         if (! $transaction) {
-            return response()->json(['error' => 'Transaction not found'], 404);
+            $withdrawal = null;
+            if ($requestId) {
+                $withdrawal = $withdrawals->applyProviderStatus((string) $requestId, (string) $status, $payload);
+            }
+            if (! $withdrawal && $externalId) {
+                $withdrawalRequest = \App\Models\CreatorWithdrawalRequest::where('reference', $externalId)->first();
+                if ($withdrawalRequest?->gateway_reference) {
+                    $withdrawal = $withdrawals->applyProviderStatus(
+                        $withdrawalRequest->gateway_reference,
+                        (string) $status,
+                        $payload
+                    );
+                }
+            }
+
+            return $withdrawal
+                ? response()->json(['status' => 'ok'])
+                : response()->json(['error' => 'Transaction not found'], 404);
         }
 
         if ($transaction->status === 'SUCCESS') {

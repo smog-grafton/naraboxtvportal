@@ -14,8 +14,10 @@ return new class extends Migration
             return;
         }
 
-        DB::statement('ALTER TABLE articles MODIFY category VARCHAR(255) NULL');
-        DB::statement('ALTER TABLE articles MODIFY image VARCHAR(255) NULL');
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement('ALTER TABLE articles MODIFY category VARCHAR(255) NULL');
+            DB::statement('ALTER TABLE articles MODIFY image VARCHAR(255) NULL');
+        }
 
         Schema::table('articles', function (Blueprint $table) {
             if (! Schema::hasColumn('articles', 'post_type')) {

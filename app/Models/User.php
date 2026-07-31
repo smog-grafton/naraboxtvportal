@@ -3,15 +3,17 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable, HasApiTokens;
+    use HasApiTokens, HasFactory, Notifiable;
 
     /**
      * The attributes that are mass assignable.
@@ -128,6 +130,26 @@ class User extends Authenticatable
         return $this->hasOne(CreatorApplication::class);
     }
 
+    public function creatorPermission()
+    {
+        return $this->hasOne(CreatorPermission::class);
+    }
+
+    public function creatorClaims()
+    {
+        return $this->hasMany(CreatorClaim::class);
+    }
+
+    public function creatorWallet()
+    {
+        return $this->hasOne(CreatorWallet::class);
+    }
+
+    public function creatorPayoutMethods()
+    {
+        return $this->hasMany(CreatorPayoutMethod::class);
+    }
+
     public function vjProfile()
     {
         return $this->hasOne(VJ::class);
@@ -143,9 +165,18 @@ class User extends Authenticatable
         return $this->role && $this->role->name === 'admin';
     }
 
+    public function canAccessPanel(Panel $panel): bool
+    {
+        return $panel->getId() === 'admin' && $this->isAdmin();
+    }
+
     public function isVJ(): bool
     {
         if ($this->role && $this->role->name === 'vj') {
+            return true;
+        }
+
+        if ($this->vjProfile()->where('is_active', true)->exists()) {
             return true;
         }
 
@@ -162,6 +193,10 @@ class User extends Authenticatable
             return true;
         }
 
+        if ($this->mediaLibraryProfile()->where('is_active', true)->exists()) {
+            return true;
+        }
+
         $application = $this->creatorApplication;
 
         return $application
@@ -172,6 +207,31 @@ class User extends Authenticatable
     public function isCreator(): bool
     {
         return $this->isVJ() || $this->isMediaLibrary();
+    }
+
+    public function hasCreatorWorkspace(): bool
+    {
+        if ($this->isAdmin() || $this->isCreator()) {
+            return true;
+        }
+
+        return $this->creatorApplication()
+            ->whereNotIn('status', [
+                CreatorApplication::STATUS_REJECTED,
+                CreatorApplication::STATUS_SUSPENDED,
+                CreatorApplication::STATUS_REVOKED,
+            ])
+            ->exists();
+    }
+
+    public function isVerifiedCreator(): bool
+    {
+        $permission = $this->creatorPermission;
+
+        return $permission
+            && $permission->identity_verified
+            && ! $permission->is_suspended
+            && ! $permission->is_revoked;
     }
 
     public function isCustomer(): bool

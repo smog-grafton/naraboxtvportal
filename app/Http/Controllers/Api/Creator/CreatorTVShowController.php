@@ -7,14 +7,24 @@ use App\Models\TVShow;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use App\Services\CreatorContentWorkflowService;
+use App\Services\CreatorContentRules;
+use App\Services\CreatorMonetizationService;
 
 class CreatorTVShowController extends CreatorBaseController
 {
+    public function __construct(
+        private readonly CreatorContentWorkflowService $workflow,
+        private readonly CreatorMonetizationService $monetization,
+        private readonly CreatorContentRules $rules
+    ) {
+    }
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -50,32 +60,11 @@ class CreatorTVShowController extends CreatorBaseController
     {
         $user = $request->user();
 
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorCanSubmit($user)) {
             return $this->notCreator();
         }
 
-        $validated = $request->validate([
-            'title'            => ['required', 'string', 'max:255'],
-            'description'      => ['nullable', 'string'],
-            'release_date'     => ['nullable', 'date'],
-            'certificate'      => ['nullable', 'string', 'max:10'],
-            'country'          => ['nullable', 'string', 'max:100'],
-            'language'         => ['nullable', 'string', 'max:100'],
-            'original_language'=> ['nullable', 'string', 'max:100'],
-            'is_free'          => ['sometimes', 'boolean'],
-            'is_premium'       => ['sometimes', 'boolean'],
-            'price_rent'       => ['nullable', 'numeric', 'min:0'],
-            'price_buy'        => ['nullable', 'numeric', 'min:0'],
-            'genres'           => ['nullable', 'array'],
-            'genres.*'         => ['integer', 'exists:genres,id'],
-            'category_id'      => ['nullable', 'integer', 'exists:categories,id'],
-            'tmdb_id'          => ['nullable', 'integer'],
-            'tagline'          => ['nullable', 'string', 'max:500'],
-            'thumbnail'        => ['nullable', 'image', 'max:5120'],
-            'backdrop'         => ['nullable', 'image', 'max:10240'],
-            'thumbnail_url'    => ['nullable', 'string', 'max:2048'], // URL or storage path
-            'backdrop_url'     => ['nullable', 'string', 'max:2048'],
-        ]);
+        $validated = $request->validate($this->rules->tvShow());
 
         $thumbnailPath = null;
         $backdropPath = null;
@@ -116,22 +105,50 @@ class CreatorTVShowController extends CreatorBaseController
             'backdrop'         => $backdropPath,
             'tmdb_id'          => $validated['tmdb_id'] ?? null,
             'tagline'          => $validated['tagline'] ?? null,
+            'imdb_id'          => $validated['imdb_id'] ?? null,
+            'original_title'   => $validated['original_title'] ?? null,
+            'homepage'         => $validated['homepage'] ?? null,
+            'status'           => $validated['status'] ?? null,
+            'networks'         => $validated['networks'] ?? null,
+            'production_companies' => $validated['production_companies'] ?? null,
+            'production_countries' => $validated['production_countries'] ?? null,
+            'short_description' => $validated['short_description'] ?? null,
+            'director' => $validated['director'] ?? null,
+            'translation_language' => $validated['translation_language'] ?? null,
+            'trailer_url' => $validated['trailer_url'] ?? null,
+            'tags' => $validated['tags'] ?? null,
+            'seo_title' => $validated['seo_title'] ?? null,
+            'seo_description' => $validated['seo_description'] ?? null,
+            'download_enabled' => $validated['download_enabled'] ?? true,
+            'scheduled_for' => $validated['scheduled_for'] ?? null,
+            'ownership_declaration_accepted_at' => ! empty($validated['ownership_declaration']) ? now() : null,
             'is_active'        => false,
             'publish_status'   => 'draft',
         ];
 
-        if ($user->isVJ()) {
+        if ($this->resolveVjProfile($user)) {
             $vj = $this->resolveVjProfile($user);
             $showData['vj_id'] = $vj?->id;
-        } elseif ($user->isMediaLibrary()) {
+        } elseif ($this->resolveMediaLibraryProfile($user)) {
             $library = $this->resolveMediaLibraryProfile($user);
             $showData['media_library_id'] = $library?->id;
         }
 
         $show = TVShow::create($showData);
+        $this->workflow->initialize($show, $user, $user->isAdmin() ? 'administrator' : 'creator');
 
         if (!empty($validated['genres'])) {
             $show->genres()->sync($validated['genres']);
+        }
+        if (! empty($validated['actors'])) {
+            $show->actors()->sync(collect($validated['actors'])->mapWithKeys(
+                fn (array $actor, int $index) => [
+                    $actor['actor_id'] => ['role' => $actor['role'] ?? null, 'order' => $actor['order'] ?? $index],
+                ]
+            )->all());
+        }
+        if (! empty($validated['monetization'])) {
+            $this->monetization->configure($show, $user, $validated['monetization']);
         }
 
         $show->load('genres');
@@ -146,7 +163,12 @@ class CreatorTVShowController extends CreatorBaseController
     public function show(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        $show = $this->creatorTvShowQuery($user)->with(['genres', 'seasons.episodes'])->find($id);
+        $show = $this->creatorTvShowQuery($user)->with([
+            'genres', 'actors', 'subtitles', 'monetizationSetting',
+            'creatorReviews' => fn ($query) => $query->latest('reviewed_at'),
+            'seasons.episodes.videoSources',
+            'seasons.episodes.subtitles',
+        ])->find($id);
 
         if (!$show) {
             return response()->json(['success' => false, 'message' => 'TV show not found.'], 404);
@@ -180,25 +202,7 @@ class CreatorTVShowController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'TV show not found or not authorized.'], 404);
         }
 
-        $validated = $request->validate([
-            'title'            => ['sometimes', 'string', 'max:255'],
-            'description'      => ['nullable', 'string'],
-            'release_date'     => ['nullable', 'date'],
-            'certificate'      => ['nullable', 'string', 'max:10'],
-            'country'          => ['nullable', 'string', 'max:100'],
-            'language'         => ['nullable', 'string', 'max:100'],
-            'is_free'          => ['sometimes', 'boolean'],
-            'is_premium'       => ['sometimes', 'boolean'],
-            'price_rent'       => ['nullable', 'numeric', 'min:0'],
-            'price_buy'        => ['nullable', 'numeric', 'min:0'],
-            'genres'           => ['nullable', 'array'],
-            'genres.*'         => ['integer', 'exists:genres,id'],
-            'tagline'          => ['nullable', 'string', 'max:500'],
-            'thumbnail'        => ['nullable', 'image', 'max:5120'],
-            'backdrop'         => ['nullable', 'image', 'max:10240'],
-            'thumbnail_url'    => ['nullable', 'string', 'max:2048'],
-            'backdrop_url'     => ['nullable', 'string', 'max:2048'],
-        ]);
+        $validated = $request->validate($this->rules->tvShow(true));
 
         if ($request->hasFile('thumbnail')) {
             $validated['thumbnail'] = $request->file('thumbnail')->store('thumbnails', 'public');
@@ -216,12 +220,32 @@ class CreatorTVShowController extends CreatorBaseController
 
         $genres = $validated['genres'] ?? null;
         unset($validated['genres']);
+        $monetization = $validated['monetization'] ?? null;
+        unset($validated['monetization']);
+        $actors = $validated['actors'] ?? null;
+        unset($validated['actors']);
+        if (array_key_exists('ownership_declaration', $validated)) {
+            if ($validated['ownership_declaration']) {
+                $validated['ownership_declaration_accepted_at'] = now();
+            }
+            unset($validated['ownership_declaration']);
+        }
 
         $show->fill($validated);
         $show->save();
 
         if ($genres !== null) {
             $show->genres()->sync($genres);
+        }
+        if ($monetization !== null) {
+            $this->monetization->configure($show, $user, $monetization);
+        }
+        if ($actors !== null) {
+            $show->actors()->sync(collect($actors)->mapWithKeys(
+                fn (array $actor, int $index) => [
+                    $actor['actor_id'] => ['role' => $actor['role'] ?? null, 'order' => $actor['order'] ?? $index],
+                ]
+            )->all());
         }
 
         $show->load('genres');
@@ -257,11 +281,18 @@ class CreatorTVShowController extends CreatorBaseController
         }
 
         if ($user->isAdmin()) {
-            $show->update(['publish_status' => 'published', 'is_active' => true]);
+            $this->workflow->moderate($show, $user, 'approved');
+            $show->update([
+                'publication_status' => 'published',
+                'publish_status' => 'published',
+                'published_by' => $user->id,
+                'published_at' => now(),
+                'is_active' => true,
+            ]);
             $message = 'TV show published.';
             event(new ShowPublished($show->fresh()));
         } else {
-            $show->update(['publish_status' => 'pending_review']);
+            $this->workflow->submitForReview($show, $user, $request->boolean('publish_after_approval'));
             $message = 'TV show submitted for review.';
         }
 

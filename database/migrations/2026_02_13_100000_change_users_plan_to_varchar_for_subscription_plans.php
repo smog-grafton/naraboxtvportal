@@ -2,6 +2,8 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Schema\Blueprint;
 
 return new class extends Migration
 {
@@ -11,7 +13,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        DB::statement("ALTER TABLE users MODIFY COLUMN plan VARCHAR(255) NOT NULL DEFAULT 'FREE'");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE users MODIFY COLUMN plan VARCHAR(255) NOT NULL DEFAULT 'FREE'");
+        } else {
+            Schema::table('users', function (Blueprint $table): void {
+                $table->string('plan')->default('FREE')->change();
+            });
+        }
     }
 
     /**
@@ -24,6 +32,8 @@ return new class extends Migration
             WHEN plan IN ('FREE','PRO','ELITE') THEN plan 
             ELSE 'PRO' 
         END WHERE plan NOT IN ('FREE','PRO','ELITE')");
-        DB::statement("ALTER TABLE users MODIFY COLUMN plan ENUM('FREE','PRO','ELITE') NOT NULL DEFAULT 'FREE'");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE users MODIFY COLUMN plan ENUM('FREE','PRO','ELITE') NOT NULL DEFAULT 'FREE'");
+        }
     }
 };

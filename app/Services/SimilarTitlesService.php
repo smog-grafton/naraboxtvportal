@@ -28,7 +28,10 @@ class SimilarTitlesService
     private const DEFAULT_LIMIT = 10;
 
     private const WEIGHT_PER_GENRE = 10.0;
-    private const WEIGHT_VJ = 4.0;
+    // A VJ is a primary discovery signal for this catalog, not a small
+    // tie-breaker. Keep it ahead of a single shared genre while still allowing
+    // exceptionally close multi-genre matches to compete.
+    private const WEIGHT_VJ = 14.0;
     private const WEIGHT_LANGUAGE = 1.5;
     private const WEIGHT_CATEGORY = 1.5;
     private const WEIGHT_COUNTRY = 1.0;
@@ -89,7 +92,7 @@ class SimilarTitlesService
     {
         $limit = max(self::MIN_LIMIT, min(self::MAX_LIMIT, $limit));
 
-        $source->loadMissing(['genres', 'actors']);
+        $source->loadMissing(['genres', 'actors', 'vj']);
         $genreIds = $source->genres->pluck('id')->all();
         $actorIds = $source->actors->pluck('id')->all();
 
@@ -111,7 +114,19 @@ class SimilarTitlesService
             $selected = $selected->concat($fallback)->values();
         }
 
-        return $selected;
+        return $selected->map(function (Model $candidate) use ($source, $genreIds): Model {
+            $sameVj = $source->vj_id && $candidate->vj_id === $source->vj_id;
+            $sharedGenres = $candidate->genres->pluck('id')->intersect($genreIds)->count();
+            $kind = $source instanceof TVShow || ($source instanceof Movie && $source->media_type === 'SERIES')
+                ? 'shows'
+                : 'movies';
+
+            $candidate->recommendation_reason = $sameVj
+                ? 'More from '.($source->vj?->name ?: 'this VJ')
+                : ($sharedGenres > 0 ? 'Similar '.$kind : 'Because you watched this');
+
+            return $candidate;
+        });
     }
 
     private function baseQuery(Builder $query, array $genreIds, bool $requireGenre): Builder

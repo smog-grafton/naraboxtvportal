@@ -33,11 +33,11 @@ class PushDeepLink
         }
 
         foreach ([
-            'movie' => '#^app://movie/([^/?#]+)$#i',
-            'tv_show' => '#^app://tv-show/([^/?#]+)$#i',
-            'article' => '#^app://news/([^/?#]+)$#i',
-            'live' => '#^app://live/([^/?#]+)$#i',
-            'vj' => '#^app://vj/([^/?#]+)$#i',
+            'movie' => '#^app://movie/([^/?\#]+)$#i',
+            'tv_show' => '#^app://tv-show/([^/?\#]+)$#i',
+            'article' => '#^app://news/([^/?\#]+)$#i',
+            'live' => '#^app://live/([^/?\#]+)$#i',
+            'vj' => '#^app://vj/([^/?\#]+)$#i',
         ] as $kind => $pattern) {
             if (preg_match($pattern, $link, $matches) === 1) {
                 return [

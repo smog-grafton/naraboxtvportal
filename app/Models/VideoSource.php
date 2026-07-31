@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use App\Models\DownloadSource;
 
 class VideoSource extends Model
 {
@@ -16,10 +15,27 @@ class VideoSource extends Model
         'file_path',
         'quality',
         'format',
+        'media_role',
+        'server_key',
+        'source_group',
+        'quality_label',
         'file_size',
         'duration_seconds',
         'is_primary',
         'is_active',
+        'health_status',
+        'last_health_check_at',
+        'last_http_status',
+        'last_health_error',
+        'consecutive_failures',
+        'verified_at',
+        'storage_disk',
+        'storage_bucket',
+        'storage_object_key',
+        'nbx_asset_id',
+        'processing_job_id',
+        'deleted_from_storage_at',
+        'primary_changed_at',
         'metadata',
     ];
 
@@ -30,6 +46,12 @@ class VideoSource extends Model
             'duration_seconds' => 'integer',
             'is_primary' => 'boolean',
             'is_active' => 'boolean',
+            'last_health_check_at' => 'datetime',
+            'last_http_status' => 'integer',
+            'consecutive_failures' => 'integer',
+            'verified_at' => 'datetime',
+            'deleted_from_storage_at' => 'datetime',
+            'primary_changed_at' => 'datetime',
             'metadata' => 'array',
         ];
     }
@@ -67,9 +89,10 @@ class VideoSource extends Model
         }
 
         // Only sync if active
-        if (!$this->is_active) {
+        if (! $this->is_active) {
             // If video source is inactive, deactivate corresponding download source
             $this->deleteDownloadSource();
+
             return;
         }
 
@@ -88,7 +111,7 @@ class VideoSource extends Model
         if ($this->type === 'bunny_stream') {
             $existingDownloadSource = $existingDownloadQuery->first();
         } else {
-            $existingDownloadSource = $existingDownloadQuery->where(function($query) use ($downloadUrl) {
+            $existingDownloadSource = $existingDownloadQuery->where(function ($query) use ($downloadUrl) {
                 // Match by URL for url/fetched types, or file_path for local/fetched
                 if ($this->usesDownloadUrlColumn() && $downloadUrl) {
                     $query->where('url', $downloadUrl);
@@ -97,10 +120,10 @@ class VideoSource extends Model
                 } else {
                     // Fallback: match by quality and format
                     $query->where('quality', $this->quality ?? 'auto')
-                          ->where('format', $this->format ?? 'mp4');
+                        ->where('format', $this->format ?? 'mp4');
                 }
             })
-            ->first();
+                ->first();
         }
 
         // Determine quality and format
@@ -133,6 +156,7 @@ class VideoSource extends Model
 
         if (! $downloadUrl || $this->isHlsDownloadCandidate($downloadUrl, $downloadFormat)) {
             $this->deleteDownloadSource();
+
             return;
         }
 
@@ -145,7 +169,7 @@ class VideoSource extends Model
             'quality' => $quality,
             'format' => $downloadFormat,
             'file_size' => $this->file_size,
-            'label' => $quality . ' ' . strtoupper($downloadFormat),
+            'label' => $quality.' '.strtoupper($downloadFormat),
             'is_active' => $this->is_active,
         ];
 
@@ -169,7 +193,7 @@ class VideoSource extends Model
         DownloadSource::where('downloadable_type', $downloadableType)
             ->where('downloadable_id', $downloadableId)
             ->where('type', $this->type)
-            ->where(function($query) {
+            ->where(function ($query) {
                 if ($this->type === 'bunny_stream') {
                     $query->where('type', 'bunny_stream');
                 } elseif ($this->usesDownloadUrlColumn() && $this->downloadableUrl()) {
@@ -206,9 +230,9 @@ class VideoSource extends Model
                 return $path;
             }
 
-            return asset('storage/' . ltrim($path, '/'));
+            return asset('storage/'.ltrim($path, '/'));
         }
-        
+
         return $this->url ?: $this->file_path;
     }
 

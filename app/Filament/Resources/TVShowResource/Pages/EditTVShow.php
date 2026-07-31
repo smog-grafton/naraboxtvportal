@@ -71,6 +71,16 @@ class EditTVShow extends EditRecord
                 $data['categories'][] = $data['category_id'];
             }
         }
+
+        if (($this->record->submission_origin ?? 'administrator') === 'administrator'
+            && ($data['content_status'] ?? $this->record->content_status) === 'published') {
+            $data['submission_origin'] = 'administrator';
+            $data['publication_status'] = 'published';
+            $data['editorial_status'] = 'approved';
+            $data['publish_status'] = 'published';
+            $data['published_at'] = $this->record->published_at ?? now();
+        }
+
         return $data;
     }
 

@@ -12,14 +12,24 @@ class MediaPlaybackReport extends Model
         'user_id',
         'playback_session_id',
         'source_id',
+        'source_role',
+        'server_key',
+        'source_format',
         'media_type',
         'media_id',
         'episode_id',
         'error_type',
         'error_message',
+        'http_status',
+        'player_error_code',
         'playback_url',
         'device',
+        'platform',
         'app_version',
+        'attempt_number',
+        'fallback_source_id',
+        'fallback_succeeded',
+        'startup_time_ms',
         'load_time_ms',
         'buffering_count',
         'buffering_duration_ms',
@@ -34,6 +44,11 @@ class MediaPlaybackReport extends Model
     {
         return [
             'load_time_ms' => 'integer',
+            'http_status' => 'integer',
+            'attempt_number' => 'integer',
+            'fallback_source_id' => 'integer',
+            'fallback_succeeded' => 'boolean',
+            'startup_time_ms' => 'integer',
             'buffering_count' => 'integer',
             'buffering_duration_ms' => 'integer',
             'report_count' => 'integer',
@@ -86,12 +101,12 @@ class MediaPlaybackReport extends Model
             $seasonNumber = $this->episode->season?->number;
             $episodeNumber = $this->episode->number;
 
-            $prefix = $showTitle ? $showTitle . ' - ' : '';
+            $prefix = $showTitle ? $showTitle.' - ' : '';
             $episodeCode = $seasonNumber && $episodeNumber
                 ? sprintf('S%sE%s', $seasonNumber, $episodeNumber)
-                : ($episodeNumber ? 'Episode ' . $episodeNumber : 'Episode');
+                : ($episodeNumber ? 'Episode '.$episodeNumber : 'Episode');
 
-            return trim($prefix . $episodeCode . ': ' . $this->episode->title);
+            return trim($prefix.$episodeCode.': '.$this->episode->title);
         }
 
         if (strtoupper((string) $this->media_type) === 'TV_SHOW' && $this->tvShow) {
@@ -102,7 +117,7 @@ class MediaPlaybackReport extends Model
             return $this->movie->title;
         }
 
-        return 'Unknown content #' . ($this->episode_id ?: $this->media_id);
+        return 'Unknown content #'.($this->episode_id ?: $this->media_id);
     }
 
     public function getResolvedContentSubtitleAttribute(): ?string

@@ -9,8 +9,10 @@ return new class extends Migration
 {
     public function up(): void
     {
-        DB::statement("ALTER TABLE video_sources MODIFY type VARCHAR(50) NOT NULL DEFAULT 'url'");
-        DB::statement("ALTER TABLE download_sources MODIFY type VARCHAR(50) NOT NULL DEFAULT 'url'");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE video_sources MODIFY type VARCHAR(50) NOT NULL DEFAULT 'url'");
+            DB::statement("ALTER TABLE download_sources MODIFY type VARCHAR(50) NOT NULL DEFAULT 'url'");
+        }
 
         if (! Schema::hasTable('contabo_object_storage_buckets')) {
             Schema::create('contabo_object_storage_buckets', function (Blueprint $table) {

@@ -19,4 +19,14 @@ return [
         'is_active' => filter_var(env('VIDEO_SOURCES_DEFAULT_IS_ACTIVE', true), FILTER_VALIDATE_BOOLEAN),
     ],
 
+    'health' => [
+        'connect_timeout_seconds' => (int) env('VIDEO_SOURCE_HEALTH_CONNECT_TIMEOUT', 3),
+        'timeout_seconds' => (int) env('VIDEO_SOURCE_HEALTH_TIMEOUT', 8),
+        'retry_times' => (int) env('VIDEO_SOURCE_HEALTH_RETRY_TIMES', 1),
+        'retry_sleep_ms' => (int) env('VIDEO_SOURCE_HEALTH_RETRY_SLEEP_MS', 250),
+        'ttl_minutes' => (int) env('VIDEO_SOURCE_HEALTH_TTL_MINUTES', 30),
+        'failure_threshold' => (int) env('VIDEO_SOURCE_HEALTH_FAILURE_THRESHOLD', 2),
+        'candidate_limit' => (int) env('VIDEO_SOURCE_CANDIDATE_LIMIT', 5),
+    ],
+
 ];

@@ -2,10 +2,9 @@
 
 namespace App\Filament\Resources\UserResource\Pages;
 
-use App\Models\MediaLibrary;
-use App\Models\Role;
-use App\Models\VJ;
 use App\Filament\Resources\UserResource;
+use App\Models\MediaLibrary;
+use App\Models\VJ;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
@@ -18,21 +17,18 @@ class EditUser extends EditRecord
     protected function getHeaderActions(): array
     {
         $user = $this->record;
-        $roleVj = Role::where('name', 'vj')->first();
-        $roleMediaLibrary = Role::where('name', 'media_library')->first();
 
         return [
             Actions\Action::make('make_vj')
-                ->label('Make VJ')
+                ->label('Add VJ profile')
                 ->icon('heroicon-o-microphone')
                 ->color('warning')
-                ->visible(fn () => $roleVj && $user->role_id !== $roleVj->id)
+                ->visible(fn () => ! $user->vjProfile()->exists())
                 ->requiresConfirmation()
-                ->modalDescription('Assign this user as a Video Jockey. A VJ profile will be created if one does not exist.')
-                ->action(function () use ($user, $roleVj) {
-                    if (!$roleVj) return;
+                ->modalDescription('Create a VJ profile for this account without changing its administrator or customer access.')
+                ->action(function () use ($user) {
                     $vj = VJ::where('user_id', $user->id)->first();
-                    if (!$vj) {
+                    if (! $vj) {
                         VJ::create([
                             'user_id' => $user->id,
                             'name' => $user->name,
@@ -41,21 +37,18 @@ class EditUser extends EditRecord
                             'is_verified' => false,
                         ]);
                     }
-                    $user->update(['role_id' => $roleVj->id]);
-                    Notification::make()->title('User is now a VJ')->success()->send();
-                    $this->refreshFormData(['role_id']);
+                    Notification::make()->title('VJ profile added')->success()->send();
                 }),
             Actions\Action::make('make_media_library')
-                ->label('Make Media Library')
+                ->label('Add media library profile')
                 ->icon('heroicon-o-folder')
                 ->color('success')
-                ->visible(fn () => $roleMediaLibrary && $user->role_id !== $roleMediaLibrary->id)
+                ->visible(fn () => ! $user->mediaLibraryProfile()->exists())
                 ->requiresConfirmation()
-                ->modalDescription('Assign this user as a Media Library (studio). A Media Library profile will be created if one does not exist.')
-                ->action(function () use ($user, $roleMediaLibrary) {
-                    if (!$roleMediaLibrary) return;
+                ->modalDescription('Create a media library profile for this account without changing its administrator or customer access.')
+                ->action(function () use ($user) {
                     $library = MediaLibrary::where('user_id', $user->id)->first();
-                    if (!$library) {
+                    if (! $library) {
                         MediaLibrary::create([
                             'user_id' => $user->id,
                             'name' => $user->name,
@@ -64,9 +57,7 @@ class EditUser extends EditRecord
                             'is_verified' => true,
                         ]);
                     }
-                    $user->update(['role_id' => $roleMediaLibrary->id]);
-                    Notification::make()->title('User is now a Media Library')->success()->send();
-                    $this->refreshFormData(['role_id']);
+                    Notification::make()->title('Media library profile added')->success()->send();
                 }),
             Actions\DeleteAction::make(),
         ];

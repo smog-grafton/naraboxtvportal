@@ -39,7 +39,7 @@ class CreatorWithdrawalRequestResource extends Resource
                     ->getStateUsing(fn ($record) => $record->payoutMethod
                         ? ($record->payoutMethod->method_type === 'mobile_money'
                             ? ($record->payoutMethod->masked_phone ?? 'Mobile Money')
-                            : (($record->payoutMethod->bank_name ?? '') . ' ****' . substr($record->payoutMethod->account_number ?? '', -4)))
+                            : (($record->payoutMethod->bank_name ?? '') . ' ' . ($record->payoutMethod->masked_account ?? '')))
                         : '—'),
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
@@ -103,6 +103,49 @@ class CreatorWithdrawalRequestResource extends Resource
                                 ->danger()
                                 ->send();
                         }
+                    }),
+                Tables\Actions\Action::make('reconcile')
+                    ->label('Check provider')
+                    ->icon('heroicon-o-arrow-path')
+                    ->visible(fn (CreatorWithdrawalRequest $record) => $record->status === CreatorWithdrawalRequest::STATUS_PROCESSING
+                        && $record->gateway_used === 'iotec')
+                    ->action(function (CreatorWithdrawalRequest $record): void {
+                        app(WithdrawalService::class)->reconcile($record);
+                        Notification::make()->title('Provider status refreshed')->success()->send();
+                    }),
+                Tables\Actions\Action::make('confirm_manual_paid')
+                    ->label('Confirm manual payment')
+                    ->icon('heroicon-o-banknotes')
+                    ->color('success')
+                    ->visible(fn (CreatorWithdrawalRequest $record) => $record->status === CreatorWithdrawalRequest::STATUS_PROCESSING
+                        && $record->gateway_used === 'manual')
+                    ->form([
+                        \Filament\Forms\Components\TextInput::make('external_reference')
+                            ->required()
+                            ->maxLength(255),
+                        \Filament\Forms\Components\FileUpload::make('payment_evidence')
+                            ->label('Private payment evidence')
+                            ->helperText('Upload the provider receipt or bank confirmation. It remains outside the public disk.')
+                            ->disk('local')
+                            ->directory('creator-payout-evidence')
+                            ->acceptedFileTypes(['application/pdf', 'image/jpeg', 'image/png', 'image/webp'])
+                            ->maxSize(10240)
+                            ->required(),
+                    ])
+                    ->requiresConfirmation()
+                    ->action(function (CreatorWithdrawalRequest $record, array $data): void {
+                        app(WithdrawalService::class)->confirmPaid(
+                            $record,
+                            $data['external_reference'],
+                            auth()->user(),
+                            false
+                        );
+                        $record->refresh()->update([
+                            'meta' => array_merge($record->meta ?? [], [
+                                'manual_payment_evidence' => $data['payment_evidence'],
+                            ]),
+                        ]);
+                        Notification::make()->title('Manual payout confirmed')->success()->send();
                     }),
                 Tables\Actions\Action::make('reject')
                     ->label('Reject')

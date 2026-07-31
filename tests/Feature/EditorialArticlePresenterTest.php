@@ -115,7 +115,6 @@ class EditorialArticlePresenterTest extends TestCase
         ]);
 
         $article = new Article([
-            'id' => 44,
             'slug' => 'the-raider-review',
             'title' => 'The Raider Review',
             'excerpt' => 'A grounded action review.',
@@ -134,6 +133,7 @@ class EditorialArticlePresenterTest extends TestCase
             'cons' => ['A thin villain arc.'],
             'is_top_news' => true,
         ]);
+        $article->id = 44;
 
         $article->updated_at = now();
         $article->setRelation('authorUser', $author);

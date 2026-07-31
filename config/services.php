@@ -41,6 +41,10 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL') . '/api/v1/auth/google/callback'),
     ],
 
+    'apple' => [
+        'client_ids' => array_values(array_filter(array_map('trim', explode(',', env('APPLE_CLIENT_IDS', env('APPLE_CLIENT_ID', '')))))),
+    ],
+
     'flutterwave' => [
         'public_key' => env('FLW_PUBLIC_KEY'),
         'secret_key' => env('FLW_SECRET_KEY'),
@@ -51,6 +55,7 @@ return [
 
     'iotec' => [
         'card_enabled' => (bool) env('IOTEC_CARD_ENABLED', true),
+        'webhook_token' => env('IOTEC_WEBHOOK_TOKEN'),
     ],
 
     'pawapay' => [
@@ -58,6 +63,7 @@ return [
         'base_url' => env('PAWAPAY_BASE_URL', 'https://api.sandbox.pawapay.io'),
         'api_token' => env('PAWAPAY_API_TOKEN'),
         'verify_callback_signature' => (bool) env('PAWAPAY_VERIFY_CALLBACK_SIGNATURE', false),
+        'refund_webhook_token' => env('PAWAPAY_REFUND_WEBHOOK_TOKEN'),
     ],
 
     'cdn' => [
@@ -130,6 +136,7 @@ return [
         'visibility' => env('CONTABO_OBJECT_STORAGE_VISIBILITY', 'public'),
         'connect_timeout' => (int) env('CONTABO_OBJECT_STORAGE_CONNECT_TIMEOUT', 30),
         'timeout' => (int) env('CONTABO_OBJECT_STORAGE_TIMEOUT', 21600),
+        'min_fetch_bytes' => (int) env('CONTABO_OBJECT_STORAGE_MIN_FETCH_BYTES', 262144),
     ],
 
     'contabo_api' => [
@@ -163,7 +170,7 @@ return [
     ],
 
     'creator' => [
-        'direct_upload_max_mb' => (int) env('CREATOR_DIRECT_UPLOAD_MAX_MB', 600),
+        'direct_upload_max_mb' => (int) env('CREATOR_DIRECT_UPLOAD_MAX_MB', 20480),
     ],
 
     'worker_api_token' => (string) env('PORTAL_WORKER_API_TOKEN', ''),

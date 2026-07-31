@@ -2,13 +2,12 @@
 
 namespace App\Filament\Resources\MovieResource\RelationManagers;
 
+use App\Models\DownloadSource;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use App\Models\DownloadSource;
 
 class DownloadSourcesRelationManager extends RelationManager
 {
@@ -36,7 +35,11 @@ class DownloadSourcesRelationManager extends RelationManager
                 Forms\Components\FileUpload::make('file_path')
                     ->label('Download File')
                     ->directory('downloads')
-                    ->acceptedFileTypes(['video/mp4', 'video/mkv', 'video/webm', 'video/avi'])
+                    ->acceptedFileTypes([
+                        'video/mp4', 'video/x-m4v', 'video/quicktime', 'video/x-matroska',
+                        'video/webm', 'video/x-msvideo', 'video/mpeg', 'video/mp2t',
+                        'application/octet-stream',
+                    ])
                     ->maxSize(51200) // 50GB
                     ->visible(fn (Forms\Get $get) => $get('type') === 'local')
                     ->required(fn (Forms\Get $get) => $get('type') === 'local'),
@@ -64,8 +67,15 @@ class DownloadSourcesRelationManager extends RelationManager
                     ->label('Format')
                     ->options([
                         'mp4' => 'mp4',
+                        'm4v' => 'm4v',
+                        'mov' => 'mov',
                         'mkv' => 'mkv',
                         'webm' => 'webm',
+                        'avi' => 'avi',
+                        'mpeg' => 'mpeg',
+                        'mpg' => 'mpg',
+                        'ts' => 'ts',
+                        'm2ts' => 'm2ts',
                         'm3u8' => 'm3u8',
                         '_other' => 'Other (type below)',
                     ])
@@ -146,6 +156,7 @@ class DownloadSourcesRelationManager extends RelationManager
                             $data['format'] = trim((string) $data['format_other']);
                         }
                         unset($data['format_other']);
+
                         return $data;
                     }),
             ])
@@ -160,6 +171,7 @@ class DownloadSourcesRelationManager extends RelationManager
                             $data['format'] = trim((string) $data['format_other']);
                         }
                         unset($data['format_other']);
+
                         return $data;
                     }),
             ])
@@ -172,11 +184,12 @@ class DownloadSourcesRelationManager extends RelationManager
                             $data['quality_other'] = $data['quality'] ?? '';
                             $data['quality'] = '_other';
                         }
-                        $formatOptions = ['mp4', 'mkv', 'webm', 'm3u8'];
+                        $formatOptions = ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpeg', 'mpg', 'ts', 'm2ts', 'm3u8'];
                         if (! in_array((string) ($data['format'] ?? ''), $formatOptions, true)) {
                             $data['format_other'] = $data['format'] ?? '';
                             $data['format'] = '_other';
                         }
+
                         return $data;
                     })
                     ->mutateFormDataUsing(function (array $data): array {
@@ -188,6 +201,7 @@ class DownloadSourcesRelationManager extends RelationManager
                             $data['format'] = trim((string) $data['format_other']);
                         }
                         unset($data['format_other']);
+
                         return $data;
                     }),
                 Tables\Actions\DeleteAction::make(),
@@ -205,11 +219,11 @@ class DownloadSourcesRelationManager extends RelationManager
     private function formatBytes(int $bytes, int $precision = 2): string
     {
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        
+
         for ($i = 0; $bytes > 1024 && $i < count($units) - 1; $i++) {
             $bytes /= 1024;
         }
-        
-        return round($bytes, $precision) . ' ' . $units[$i];
+
+        return round($bytes, $precision).' '.$units[$i];
     }
 }

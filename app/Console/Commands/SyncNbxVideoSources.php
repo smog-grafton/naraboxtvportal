@@ -19,7 +19,7 @@ class SyncNbxVideoSources extends Command
     public function handle(NbxVideoSourceService $service): int
     {
         $query = VideoSource::query()
-            ->where('type', 'nbx-engine')
+            ->whereIn('type', ['nbx-engine', 'tele_ob'])
             ->where(function ($query): void {
                 $query->whereNull('metadata->source_role')
                     ->orWhere('metadata->source_role', '!=', 'hls_master');
@@ -39,7 +39,8 @@ class SyncNbxVideoSources extends Command
 
         if (! $this->argument('video_source_id') && ! $this->option('movie-id') && ! $this->option('episode-id')) {
             $query->where(function ($query): void {
-                $query->whereNull('metadata->fetch_status')
+                $query->where('metadata->nbx_sync_status', 'failed')
+                    ->orWhereNull('metadata->fetch_status')
                     ->orWhereNotIn('metadata->fetch_status', ['completed', 'failed']);
             })->limit(max(1, (int) $this->option('limit')));
         }

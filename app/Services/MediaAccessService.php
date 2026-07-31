@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Episode;
 use App\Models\Movie;
+use App\Models\Subscription;
 use App\Models\TVShow;
 use App\Models\User;
 use App\Models\UserPurchase;
@@ -151,6 +152,56 @@ class MediaAccessService
                 ];
             }
 
+            // Accounts created before user_subscriptions was introduced can
+            // still have a valid paid term in the legacy subscriptions table.
+            // Dashboard historically attempted this fallback, while playback
+            // did not, causing a customer to look subscribed on one screen and
+            // be denied on every title detail/player request.
+            $legacySubscription = Subscription::query()
+                ->where('user_id', $user->id)
+                ->whereRaw("UPPER(status) = 'ACTIVE'")
+                ->where(function ($query) {
+                    $query->whereNull('end_date')
+                        ->orWhere('end_date', '>', now());
+                })
+                ->latest('end_date')
+                ->first();
+
+            if ($legacySubscription) {
+                return [
+                    'has_access' => true,
+                    'access_type' => 'SUBSCRIPTION',
+                    'reason' => 'You have an active subscription',
+                    'code' => 'ACCESS_GRANTED',
+                    'subscription_expires_at' => $legacySubscription->end_date?->toIso8601String(),
+                    'http_status' => 200,
+                ];
+            }
+
+            // Some administrator-granted plans predate both subscription
+            // ledgers and intentionally live on the users table. Honour only
+            // records with no ledger history, so an expired paid subscription
+            // cannot be revived by a stale plan_status flag.
+            $hasSubscriptionLedger = UserSubscription::query()
+                ->where('user_id', $user->id)
+                ->exists()
+                || Subscription::query()->where('user_id', $user->id)->exists();
+            $manualPlanIsActive = ! $hasSubscriptionLedger
+                && strtoupper((string) $user->plan_status) === 'ACTIVE'
+                && strtoupper((string) $user->plan) !== 'FREE'
+                && (! $user->renewal_date || $user->renewal_date->isFuture());
+
+            if ($manualPlanIsActive) {
+                return [
+                    'has_access' => true,
+                    'access_type' => 'SUBSCRIPTION',
+                    'reason' => 'You have an active subscription',
+                    'code' => 'ACCESS_GRANTED',
+                    'subscription_expires_at' => $user->renewal_date?->toIso8601String(),
+                    'http_status' => 200,
+                ];
+            }
+
             $pendingSubscription = $this->pendingPaymentResolver
                 ->getPendingSubscriptionTransaction($user->id);
 
@@ -178,6 +229,16 @@ class MediaAccessService
                         ->orWhereIn('status', ['EXPIRED', 'CANCELLED']);
                 })
                 ->exists();
+
+            if (! $hadExpiredSubscription) {
+                $hadExpiredSubscription = Subscription::query()
+                    ->where('user_id', $user->id)
+                    ->where(function ($query) {
+                        $query->whereIn('status', ['EXPIRED', 'CANCELLED'])
+                            ->orWhere('end_date', '<=', now());
+                    })
+                    ->exists();
+            }
 
             return array_merge([
                 'has_access' => false,

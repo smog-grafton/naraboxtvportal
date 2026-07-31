@@ -15,6 +15,10 @@ return new class extends Migration
             });
         }
 
+        if (DB::getDriverName() !== 'mysql') {
+            return;
+        }
+
         $mediaForeign = DB::selectOne("
             SELECT CONSTRAINT_NAME
             FROM information_schema.KEY_COLUMN_USAGE
@@ -68,6 +72,16 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() !== 'mysql') {
+            if (Schema::hasColumn('watch_history', 'media_type')) {
+                Schema::table('watch_history', function (Blueprint $table) {
+                    $table->dropColumn('media_type');
+                });
+            }
+
+            return;
+        }
+
         $indexes = collect(DB::select("SHOW INDEX FROM `watch_history`"))
             ->pluck('Key_name')
             ->unique()

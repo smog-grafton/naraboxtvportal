@@ -37,7 +37,7 @@ class CdnPlaybackReadinessService
     }
 
     /**
-     * @param Collection<int, VideoSource> $sources
+     * @param  Collection<int, VideoSource>  $sources
      */
     public function syncSources(Collection $sources, bool $queueMissingOnCdn = false, bool $force = false): array
     {
@@ -58,7 +58,13 @@ class CdnPlaybackReadinessService
 
             $hlsReady = false;
             if ($hlsSource && $hlsUrl !== null && $this->shouldCheck($hlsSource, $force)) {
-                $result = $this->checkHlsManifest($hlsUrl);
+                $health = app(MediaSourceHealthChecker::class)->check($hlsSource);
+                $result = [
+                    'ready' => (bool) ($health['verified'] ?? false),
+                    'status' => $health['http_status'] ?? null,
+                    'error' => $health['error'] ?? null,
+                    'checked_at' => now()->toDateTimeString(),
+                ];
                 $checked++;
                 $hlsReady = $result['ready'];
                 $this->markReadiness($hlsSource, $result, 'hls');
@@ -69,6 +75,7 @@ class CdnPlaybackReadinessService
             if ($hlsReady && $hlsSource) {
                 $this->activateAndPromote($hlsSource);
                 $promoted = $hlsSource->id;
+
                 continue;
             }
 
@@ -78,7 +85,13 @@ class CdnPlaybackReadinessService
 
             $mp4Ready = false;
             if ($mp4PlaySource && $mp4PlayUrl !== null && $this->shouldCheck($mp4PlaySource, $force)) {
-                $result = $this->checkMp4Playback($mp4PlayUrl);
+                $health = app(MediaSourceHealthChecker::class)->check($mp4PlaySource);
+                $result = [
+                    'ready' => (bool) ($health['verified'] ?? false),
+                    'status' => $health['http_status'] ?? null,
+                    'error' => $health['error'] ?? null,
+                    'checked_at' => now()->toDateTimeString(),
+                ];
                 $checked++;
                 $mp4Ready = $result['ready'];
                 $this->markReadiness($mp4PlaySource, $result, 'mp4_play');
@@ -108,7 +121,7 @@ class CdnPlaybackReadinessService
     }
 
     /**
-     * @param Collection<int, VideoSource> $sources
+     * @param  Collection<int, VideoSource>  $sources
      * @return array<int|string, array{cdn_source_id:int|null,sources:Collection<int, VideoSource>,hls_url:?string,mp4_play_url:?string}>
      */
     private function groupSourcesByCdnSource(Collection $sources): array
@@ -160,7 +173,7 @@ class CdnPlaybackReadinessService
     }
 
     /**
-     * @param Collection<int, VideoSource> $sources
+     * @param  Collection<int, VideoSource>  $sources
      */
     private function ensureDerivedSource(Collection $sources, ?string $url, string $role, string $quality, string $format): ?VideoSource
     {
@@ -201,6 +214,10 @@ class CdnPlaybackReadinessService
             'file_path' => $url,
             'quality' => $quality,
             'format' => $format,
+            'media_role' => $role === 'mp4_play' ? 'faststart_mp4' : $role,
+            'server_key' => 'nbx',
+            'source_group' => isset($metadata['cdn_source_id']) ? 'cdn:'.$metadata['cdn_source_id'] : null,
+            'quality_label' => $format === 'm3u8' ? 'auto' : $quality,
             'file_size' => config('video_sources.defaults.file_size'),
             'duration_seconds' => config('video_sources.defaults.duration_seconds'),
             'is_primary' => false,
@@ -210,7 +227,7 @@ class CdnPlaybackReadinessService
     }
 
     /**
-     * @param Collection<int, VideoSource> $sources
+     * @param  Collection<int, VideoSource>  $sources
      */
     private function findFallbackSource(Collection $sources, ?VideoSource $mp4PlaySource): ?VideoSource
     {
@@ -226,7 +243,8 @@ class CdnPlaybackReadinessService
         }
 
         $ttlMinutes = max(1, (int) config('services.cdn.hls_readiness_ttl_minutes', 30));
-        $checkedAt = $source->metadata['cdn_readiness_checked_at'] ?? null;
+        $checkedAt = $source->last_health_check_at
+            ?: ($source->metadata['cdn_readiness_checked_at'] ?? null);
         if (! is_string($checkedAt) || $checkedAt === '') {
             return true;
         }
@@ -307,7 +325,7 @@ class CdnPlaybackReadinessService
     }
 
     /**
-     * @param array{ready:bool,status:int|null,error:?string,checked_at:string} $result
+     * @param  array{ready:bool,status:int|null,error:?string,checked_at:string}  $result
      */
     private function markReadiness(VideoSource $source, array $result, string $kind): void
     {
@@ -333,16 +351,8 @@ class CdnPlaybackReadinessService
 
     private function activateAndPromote(VideoSource $source): void
     {
-        VideoSource::withoutEvents(function () use ($source): void {
-            VideoSource::where('sourceable_type', $source->sourceable_type)
-                ->where('sourceable_id', $source->sourceable_id)
-                ->update(['is_primary' => false]);
-
-            $source->forceFill([
-                'is_active' => true,
-                'is_primary' => true,
-            ])->save();
-        });
+        $source->forceFill(['is_active' => true])->saveQuietly();
+        app(MediaSourceSelectionService::class)->promoteIfHealthy($source, 'scheduled_health_verification');
     }
 
     private function deactivateUnreadySource(VideoSource $source): void

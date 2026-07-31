@@ -67,6 +67,14 @@ class CreateMovie extends CreateRecord
             $data['backdrop'] = null;
         }
 
+        if (($data['content_status'] ?? 'published') === 'published') {
+            $data['submission_origin'] = 'administrator';
+            $data['publication_status'] = 'published';
+            $data['editorial_status'] = 'approved';
+            $data['publish_status'] = 'published';
+            $data['published_at'] = $data['published_at'] ?? now();
+        }
+
         return $data;
     }
 

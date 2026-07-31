@@ -7,6 +7,7 @@ use App\Models\Episode;
 use App\Models\Movie;
 use App\Models\TVShow;
 use App\Models\VideoSource;
+use App\Services\MediaSourceSelectionService;
 use App\Services\SimilarTitlesService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -46,7 +47,7 @@ class TVShowController extends Controller
                 $categoryParam = $request->get('category');
                 $query->whereHas('category', function ($q) use ($categoryParam) {
                     $q->where('slug', $categoryParam)
-                      ->orWhere('name', $categoryParam);
+                        ->orWhere('name', $categoryParam);
                 });
             }
 
@@ -59,7 +60,7 @@ class TVShowController extends Controller
                 $genreParam = $request->get('genre');
                 $query->whereHas('genres', function ($q) use ($genreParam) {
                     $q->where('slug', $genreParam)
-                      ->orWhere('name', $genreParam);
+                        ->orWhere('name', $genreParam);
                 });
             }
 
@@ -70,11 +71,11 @@ class TVShowController extends Controller
                 $vjParam = $request->get('vj');
                 $query->whereHas('vj', function ($q) use ($vjParam) {
                     $q->where('is_active', true)
-                      ->where(function ($subQ) use ($vjParam) {
-                          $subQ->where('slug', $vjParam)
-                               ->orWhere('id', $vjParam)
-                               ->orWhere('name', $vjParam);
-                      });
+                        ->where(function ($subQ) use ($vjParam) {
+                            $subQ->where('slug', $vjParam)
+                                ->orWhere('id', $vjParam)
+                                ->orWhere('name', $vjParam);
+                        });
                 });
             }
 
@@ -99,13 +100,13 @@ class TVShowController extends Controller
             // Rental catalog
             if ($filter === 'rent') {
                 $query->whereNotNull('price_rent')
-                      ->where('price_rent', '>', 0);
+                    ->where('price_rent', '>', 0);
             }
 
             // Purchase catalog
             if ($filter === 'purchase') {
                 $query->whereNotNull('price_buy')
-                      ->where('price_buy', '>', 0);
+                    ->where('price_buy', '>', 0);
             }
 
             // Premium catalog
@@ -120,15 +121,17 @@ class TVShowController extends Controller
 
             // Sorting (align with MovieController)
             $sort = $request->get('sort', 'trending');
-            $order = $request->get('order', 'desc');
+            $order = strtolower((string) $request->get('order', 'desc')) === 'asc' ? 'asc' : 'desc';
 
             if ($sort === 'latest') {
-                $query->orderBy('created_at', $order);
+                $query->orderByRaw("COALESCE(published_at, created_at) {$order}");
             } elseif ($sort === 'trending') {
                 // Trending based on total views (views_count + manual_views)
                 $query->orderByRaw('(views_count + manual_views) DESC');
             } elseif ($sort === 'rating') {
                 $query->orderBy('rating', $order);
+            } elseif ($sort === 'title') {
+                $query->orderBy('title', $order);
             } else {
                 $query->orderByRaw('(views_count + manual_views) DESC');
             }
@@ -139,7 +142,7 @@ class TVShowController extends Controller
             $tvShows = $query->paginate($request->get('per_page', 20));
 
             return response()->json([
-                'data' => $tvShows->map(fn($tv) => $this->formatTVShowSummary($tv)),
+                'data' => $tvShows->map(fn ($tv) => $this->formatTVShowSummary($tv)),
                 'meta' => [
                     'current_page' => $tvShows->currentPage(),
                     'last_page' => $tvShows->lastPage(),
@@ -148,7 +151,8 @@ class TVShowController extends Controller
                 ],
             ]);
         } catch (\Exception $e) {
-            Log::error('TVShowController::index error: ' . $e->getMessage());
+            Log::error('TVShowController::index error: '.$e->getMessage());
+
             return response()->json([
                 'error' => 'Failed to load TV shows',
                 'message' => $e->getMessage(),
@@ -160,14 +164,14 @@ class TVShowController extends Controller
     {
         // Support both slug and ID (backward compatibility)
         $tvShow = TVShow::with('genres', 'vj.genres', 'mediaLibrary', 'category', 'actors', 'seasons.episodes.videoSources')
-                       ->where('is_active', true)
-                       ->where(function ($query) use ($id) {
-                           $query->where('id', $id)
-                                 ->orWhere('slug', $id);
-                       })
-                       ->first();
+            ->where('is_active', true)
+            ->where(function ($query) use ($id) {
+                $query->where('id', $id)
+                    ->orWhere('slug', $id);
+            })
+            ->first();
 
-        if (!$tvShow) {
+        if (! $tvShow) {
             return response()->json(['message' => 'TV Show not found'], 404);
         }
 
@@ -183,11 +187,11 @@ class TVShowController extends Controller
         $tvShow = TVShow::where('is_active', true)
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)
-                      ->orWhere('slug', $id);
+                    ->orWhere('slug', $id);
             })
             ->first();
 
-        if (!$tvShow) {
+        if (! $tvShow) {
             return response()->json(['message' => 'TV Show not found'], 404);
         }
 
@@ -196,9 +200,12 @@ class TVShowController extends Controller
 
         return response()->json([
             'data' => $results->map(function ($item) {
-                return $item instanceof Movie
+                $payload = $item instanceof Movie
                     ? app(MovieController::class)->formatMovieSummary($item)
                     : $this->formatTVShowSummary($item);
+                $payload['recommendation_reason'] = $item->recommendation_reason ?? 'Because you watched this';
+
+                return $payload;
             })->values(),
         ]);
     }
@@ -206,11 +213,14 @@ class TVShowController extends Controller
     public function formatTVShowSummary(TVShow $tvShow): array
     {
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
 
         $status = $tvShow->content_status ?? 'published';
@@ -263,11 +273,14 @@ class TVShowController extends Controller
     private function formatTVShow(TVShow $tvShow): array
     {
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
 
         $status = $tvShow->content_status ?? 'published';
@@ -349,6 +362,11 @@ class TVShowController extends Controller
 
     private function resolvePlayableVideoUrl(Episode $episode): ?string
     {
+        $preferred = app(MediaSourceSelectionService::class)->preferredFor($episode);
+        if ($preferred) {
+            return app(MediaSourceSelectionService::class)->sourceUrl($preferred);
+        }
+
         $legacyUrl = trim((string) ($episode->video_url ?? ''));
         if ($legacyUrl !== '') {
             return $legacyUrl;
@@ -401,11 +419,14 @@ class TVShowController extends Controller
     private function formatCreator(TVShow $tvShow): ?array
     {
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
         if ($tvShow->mediaLibrary) {
             return [
@@ -435,6 +456,7 @@ class TVShowController extends Controller
                 'translatedCount' => $tvShow->vj->translated_count ? (int) $tvShow->vj->translated_count : null,
             ];
         }
+
         return null;
     }
 }

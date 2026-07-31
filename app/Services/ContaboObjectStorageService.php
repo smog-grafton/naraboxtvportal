@@ -15,7 +15,7 @@ class ContaboObjectStorageService
     {
         $this->ensureRuntimeDiskCredentials();
 
-        $disk = config('filesystems.disks.' . $this->diskName(), []);
+        $disk = config('filesystems.disks.'.$this->diskName(), []);
 
         return (bool) config('services.contabo_object_storage.enabled', false)
             && filled($disk['key'] ?? null)
@@ -30,7 +30,7 @@ class ContaboObjectStorageService
             return 'Contabo Object Storage is disabled in the active .env. Set CONTABO_OBJECT_STORAGE_ENABLED=true and run php artisan config:clear.';
         }
 
-        $disk = config('filesystems.disks.' . $this->diskName(), []);
+        $disk = config('filesystems.disks.'.$this->diskName(), []);
         $missing = [];
 
         if (! filled($disk['bucket'] ?? null)) {
@@ -41,7 +41,7 @@ class ContaboObjectStorageService
         }
 
         if ($missing !== []) {
-            return 'Contabo Object Storage is missing ' . implode(', ', $missing) . ' in the active .env.';
+            return 'Contabo Object Storage is missing '.implode(', ', $missing).' in the active .env.';
         }
 
         if (filled($disk['key'] ?? null) && filled($disk['secret'] ?? null)) {
@@ -54,7 +54,7 @@ class ContaboObjectStorageService
         }
 
         if ($this->lastCredentialDiscoveryError !== null) {
-            return 'Contabo API credentials are present, but S3 credential discovery failed: ' . $this->lastCredentialDiscoveryError;
+            return 'Contabo API credentials are present, but S3 credential discovery failed: '.$this->lastCredentialDiscoveryError;
         }
 
         return 'Contabo API credentials are present, but the app could not discover S3 credentials. Check that the API user can access Users and Object Storage credential endpoints.';
@@ -136,7 +136,7 @@ class ContaboObjectStorageService
     {
         $segments = array_map('rawurlencode', explode('/', ltrim($this->normalizeKey($key), '/')));
 
-        return $this->publicBaseUrl() . '/' . implode('/', $segments);
+        return $this->publicBaseUrl().'/'.implode('/', $segments);
     }
 
     public function normalizeKey(string $key): string
@@ -167,10 +167,10 @@ class ContaboObjectStorageService
             $baseName = 'video';
         }
 
-        $qualityPart = $quality && $quality !== 'auto' ? '-' . Str::slug(Str::ascii($quality)) : '';
-        $safeName = $baseName . $qualityPart . '-' . now()->format('YmdHis') . '-' . Str::lower(Str::random(8)) . '.' . $extension;
+        $qualityPart = $quality && $quality !== 'auto' ? '-'.Str::slug(Str::ascii($quality)) : '';
+        $safeName = $baseName.$qualityPart.'-'.now()->format('YmdHis').'-'.Str::lower(Str::random(8)).'.'.$extension;
 
-        return $this->normalizeKey(trim($prefix . '/' . $group . '/' . $sourceableId . '/' . $safeName, '/'));
+        return $this->normalizeKey(trim($prefix.'/'.$group.'/'.$sourceableId.'/'.$safeName, '/'));
     }
 
     /**
@@ -279,11 +279,24 @@ class ContaboObjectStorageService
             if ($statusCode < 200 || $statusCode >= 300) {
                 return [
                     'ok' => false,
-                    'error' => 'Remote video fetch failed with HTTP ' . $statusCode . '.',
+                    'error' => 'Remote video fetch failed with HTTP '.$statusCode.'.',
                 ];
             }
 
-            $filename = $this->filenameFromUrl($sourceUrl, $response->getHeaderLine('Content-Type'), $format);
+            $validationError = $this->validateRemoteVideoResponse($response, $sourceUrl, $format);
+            if ($validationError !== null) {
+                return [
+                    'ok' => false,
+                    'error' => $validationError,
+                ];
+            }
+
+            $filename = $this->filenameFromUrl(
+                $sourceUrl,
+                $response->getHeaderLine('Content-Type'),
+                $format,
+                $response->getHeaderLine('Content-Disposition')
+            );
             $key = $this->buildObjectKey($filename, $assetType, $sourceableType, $sourceableId, $quality, $format);
             $body = $response->getBody();
             $resource = $body->detach();
@@ -324,7 +337,7 @@ class ContaboObjectStorageService
         } catch (\Throwable $exception) {
             return [
                 'ok' => false,
-                'error' => 'Remote video fetch failed: ' . $exception->getMessage(),
+                'error' => 'Remote video fetch failed: '.$exception->getMessage(),
             ];
         }
     }
@@ -354,7 +367,7 @@ class ContaboObjectStorageService
     private function ensureRuntimeDiskCredentials(): void
     {
         $diskName = $this->diskName();
-        $disk = config('filesystems.disks.' . $diskName, []);
+        $disk = config('filesystems.disks.'.$diskName, []);
 
         if (filled($disk['key'] ?? null) && filled($disk['secret'] ?? null)) {
             return;
@@ -364,6 +377,7 @@ class ContaboObjectStorageService
 
         if (! ($credentialResult['ok'] ?? false) || ! is_array($credentialResult['data'] ?? null)) {
             $this->lastCredentialDiscoveryError = (string) ($credentialResult['error'] ?? 'No credential details returned by Contabo.');
+
             return;
         }
 
@@ -373,14 +387,15 @@ class ContaboObjectStorageService
 
         if ($accessKey === '' || $secretKey === '') {
             $this->lastCredentialDiscoveryError = 'Contabo returned a credential record without accessKey or secretKey.';
+
             return;
         }
 
         $this->lastCredentialDiscoveryError = null;
 
         config([
-            'filesystems.disks.' . $diskName . '.key' => $accessKey,
-            'filesystems.disks.' . $diskName . '.secret' => $secretKey,
+            'filesystems.disks.'.$diskName.'.key' => $accessKey,
+            'filesystems.disks.'.$diskName.'.secret' => $secretKey,
         ]);
 
         try {
@@ -390,13 +405,83 @@ class ContaboObjectStorageService
         }
     }
 
-    private function filenameFromUrl(string $url, ?string $contentType = null, ?string $fallbackFormat = null): string
+    private function validateRemoteVideoResponse($response, string $sourceUrl, ?string $fallbackFormat = null): ?string
     {
+        $contentType = strtolower(trim((string) $response->getHeaderLine('Content-Type')));
+        $contentLength = trim((string) $response->getHeaderLine('Content-Length'));
+        $contentDisposition = (string) $response->getHeaderLine('Content-Disposition');
+        $minBytes = max(0, (int) config('services.contabo_object_storage.min_fetch_bytes', 262144));
+
+        if (is_numeric($contentLength) && (int) $contentLength > 0 && (int) $contentLength < $minBytes) {
+            return 'Remote video fetch returned only '.$contentLength.' bytes, which is too small for a playable movie file.';
+        }
+
+        if ($this->isHtmlLikeContentType($contentType)) {
+            return 'Remote video fetch returned HTML instead of video. The source link may be expired, gated, or a converter landing page.';
+        }
+
+        if ($this->isVideoLikeContentType($contentType)) {
+            return null;
+        }
+
+        if ($this->filenameFromContentDisposition($contentDisposition) !== null) {
+            return null;
+        }
+
+        $path = (string) (parse_url($sourceUrl, PHP_URL_PATH) ?: '');
+        $filename = $this->sanitizeFilename(basename($path));
+        if ($filename !== null && $this->hasAllowedVideoExtension($filename)) {
+            return null;
+        }
+
+        $fallback = strtolower(trim((string) $fallbackFormat));
+        if ($fallback !== '' && $fallback !== 'auto' && in_array($fallback, self::VIDEO_EXTENSIONS, true)) {
+            return null;
+        }
+
+        return 'Remote video fetch did not return a recognizable video response. Content-Type was "'.($contentType ?: 'unknown').'".';
+    }
+
+    private function isHtmlLikeContentType(string $contentType): bool
+    {
+        return str_contains($contentType, 'text/html')
+            || str_contains($contentType, 'application/xhtml+xml')
+            || str_contains($contentType, 'application/json')
+            || str_contains($contentType, 'text/plain');
+    }
+
+    private function isVideoLikeContentType(string $contentType): bool
+    {
+        if ($contentType === '') {
+            return false;
+        }
+
+        return str_starts_with($contentType, 'video/')
+            || str_contains($contentType, 'application/octet-stream')
+            || str_contains($contentType, 'binary/octet-stream')
+            || str_contains($contentType, 'application/x-download')
+            || str_contains($contentType, 'application/force-download')
+            || str_contains($contentType, 'application/vnd.apple.mpegurl')
+            || str_contains($contentType, 'application/x-mpegurl');
+    }
+
+    private function filenameFromUrl(
+        string $url,
+        ?string $contentType = null,
+        ?string $fallbackFormat = null,
+        ?string $contentDisposition = null
+    ): string {
+        $filenameFromDisposition = $this->filenameFromContentDisposition($contentDisposition);
+        if ($filenameFromDisposition !== null) {
+            return $filenameFromDisposition;
+        }
+
         $extensionFromQuery = $this->extensionFromQueryString($url);
         if ($extensionFromQuery !== null) {
-            $basenameFromQuery = $this->basenameFromQueryString($url) ?? ('video-' . now()->format('YmdHis'));
+            $basenameFromQuery = $this->basenameFromQueryString($url) ?? ('video-'.now()->format('YmdHis'));
             $baseNameOnly = pathinfo($basenameFromQuery, PATHINFO_FILENAME) ?: $basenameFromQuery;
-            return $baseNameOnly . '.' . $extensionFromQuery;
+
+            return $baseNameOnly.'.'.$extensionFromQuery;
         }
 
         $path = (string) (parse_url($url, PHP_URL_PATH) ?: '');
@@ -425,10 +510,33 @@ class ContaboObjectStorageService
                 $this->extensionFromContentType($contentType),
                 $fallbackFormat
             );
-            $filename = 'video-' . now()->format('YmdHis') . '.' . strtolower($extension);
+            $filename = 'video-'.now()->format('YmdHis').'.'.strtolower($extension);
         }
 
         return $filename;
+    }
+
+    private function filenameFromContentDisposition(?string $contentDisposition): ?string
+    {
+        if (! is_string($contentDisposition) || trim($contentDisposition) === '') {
+            return null;
+        }
+
+        if (preg_match("/filename\\*=UTF-8''([^;]+)/i", $contentDisposition, $matches)) {
+            $candidate = $this->sanitizeFilename(rawurldecode(trim($matches[1], "\"' ")));
+            if ($candidate !== null && $this->hasAllowedVideoExtension($candidate)) {
+                return $candidate;
+            }
+        }
+
+        if (preg_match('/filename="?([^";]+)"?/i', $contentDisposition, $matches)) {
+            $candidate = $this->sanitizeFilename(trim($matches[1], "\"' "));
+            if ($candidate !== null && $this->hasAllowedVideoExtension($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     private function extensionFromQueryString(string $url): ?string
@@ -480,6 +588,7 @@ class ContaboObjectStorageService
 
         $decoded = urldecode($filename);
         $decoded = $this->replaceEmbeddedDomainsWithWhiteLabel($decoded);
+        $decoded = preg_replace('/[\s_-]*-[\s_-]*(?=naraboxtv\.com)/i', ' ', $decoded) ?: $decoded;
         $clean = preg_replace('/[^A-Za-z0-9._-]/', '_', $decoded) ?: '';
         $clean = preg_replace('/_+/', '_', $clean) ?: '';
         $clean = ltrim($clean, '.');

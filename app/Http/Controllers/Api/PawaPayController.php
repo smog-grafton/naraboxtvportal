@@ -10,6 +10,8 @@ use App\Models\SubscriptionPlan;
 use App\Models\TVShow;
 use App\Services\PawaPayService;
 use App\Services\PaymentApprovalService;
+use App\Services\CreatorEarningsService;
+use App\Services\MoneyService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -318,18 +320,40 @@ class PawaPayController extends Controller
         return response()->json(['status' => 'ok']);
     }
 
-    /**
-     * PawaPay refund webhook (placeholder)
-     *
-     * Currently returns a 202 “disabled” response. Once refunds are implemented,
-     * this can be wired to update transactions when provider-initiated refunds occur.
-     */
-    public function refundWebhook()
+    public function refundWebhook(Request $request, CreatorEarningsService $earnings)
     {
-        return response()->json([
-            'status' => 'disabled',
-            'message' => 'Refund webhooks are not enabled yet.',
-        ], 202);
+        $configuredToken = (string) config('services.pawapay.refund_webhook_token');
+        $providedToken = (string) $request->header('X-PawaPay-Refund-Token');
+        if ($configuredToken === '' || $providedToken === '' || ! hash_equals($configuredToken, $providedToken)) {
+            return response()->json(['error' => 'Invalid refund callback token'], 401);
+        }
+
+        $validated = $request->validate([
+            'depositId' => ['nullable', 'string', 'max:255', 'required_without:originalDepositId'],
+            'originalDepositId' => ['nullable', 'string', 'max:255'],
+            'refundId' => ['required', 'string', 'max:255'],
+            'status' => ['required', 'string', 'max:40'],
+            'amount' => ['nullable', 'numeric', 'min:0.01', 'required_without:refundAmount'],
+            'refundAmount' => ['nullable', 'numeric', 'min:0.01'],
+        ]);
+        if (! in_array(strtoupper($validated['status']), ['SUCCESS', 'COMPLETED'], true)) {
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $depositId = $validated['originalDepositId'] ?? $validated['depositId'];
+        $transaction = PaymentTransaction::where('external_reference', $depositId)->first();
+        if (! $transaction) {
+            return response()->json(['status' => 'ok']);
+        }
+
+        $earnings->reverseForTransaction(
+            $transaction,
+            MoneyService::toMinor((string) ($validated['refundAmount'] ?? $validated['amount'])),
+            (string) $validated['refundId']
+        );
+        $transaction->update(['raw_callback' => $request->all()]);
+
+        return response()->json(['status' => 'ok']);
     }
 
     private function applyProviderResult(PaymentTransaction $transaction, array $result, PawaPayService $pawaPayService): void
@@ -426,4 +450,3 @@ class PawaPayController extends Controller
             && $request->headers->has('Content-Digest');
     }
 }
-

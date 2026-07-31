@@ -127,6 +127,7 @@ class DashboardController extends Controller
         // Get user's active subscription (ACTIVE status and not expired)
         // First check new user_subscriptions table
         $subscription = null;
+        $legacySubscription = null;
         if (\Schema::hasTable('user_subscriptions')) {
             // Check for expired subscriptions and update them
             UserSubscription::where('user_id', $user->id)
@@ -145,7 +146,7 @@ class DashboardController extends Controller
         
         // Fallback to old subscriptions table if no active subscription found
         if (!$subscription) {
-            $oldSubscription = \App\Models\Subscription::where('user_id', $user->id)
+            $legacySubscription = \App\Models\Subscription::where('user_id', $user->id)
                 ->whereRaw("UPPER(status) = 'ACTIVE'")
                 ->where(function($query) {
                     $query->whereNull('end_date')
@@ -153,12 +154,6 @@ class DashboardController extends Controller
                 })
                 ->latest()
                 ->first();
-            
-            // If found but expired, update it
-            if ($oldSubscription && $oldSubscription->end_date && $oldSubscription->end_date->isPast()) {
-                $oldSubscription->update(['status' => 'EXPIRED']);
-                $oldSubscription = null;
-            }
         }
             
         // If no active subscription, get the latest one (even if expired) for display
@@ -168,9 +163,19 @@ class DashboardController extends Controller
                 ->latest()
                 ->first();
         }
+
+        $subscriptionIsActive = $subscription
+            && $subscription->status === 'ACTIVE'
+            && $subscription->expires_at > now();
+        $hasSubscriptionLedger = UserSubscription::where('user_id', $user->id)->exists()
+            || \App\Models\Subscription::where('user_id', $user->id)->exists();
+        $manualPlanIsActive = ! $hasSubscriptionLedger
+            && strtoupper((string) $user->plan_status) === 'ACTIVE'
+            && strtoupper((string) $user->plan) !== 'FREE'
+            && (! $user->renewal_date || $user->renewal_date->isFuture());
         
         // Update user's plan_status if subscription is expired or doesn't exist
-        if (!$subscription || $subscription->status !== 'ACTIVE' || $subscription->expires_at <= now()) {
+        if (!$subscriptionIsActive && !$legacySubscription && !$manualPlanIsActive) {
             // Check if user has any active subscription
             $hasActiveSubscription = UserSubscription::where('user_id', $user->id)
                 ->where('status', 'ACTIVE')
@@ -297,8 +302,14 @@ class DashboardController extends Controller
         if ($pendingSubscriptionPayment) {
             $planDisplayName = $pendingSubscriptionPayment->subscriptionPlan->name ?? 'FREE';
             $planStatus = 'PENDING';
-        } elseif ($subscription && $subscription->status === 'ACTIVE' && $subscription->expires_at > now()) {
+        } elseif ($subscriptionIsActive) {
             $planDisplayName = $subscription->subscriptionPlan->name ?? 'PRO';
+            $planStatus = 'ACTIVE';
+        } elseif ($legacySubscription) {
+            $planDisplayName = $legacySubscription->plan ?? 'PRO';
+            $planStatus = 'ACTIVE';
+        } elseif ($manualPlanIsActive) {
+            $planDisplayName = $user->plan;
             $planStatus = 'ACTIVE';
         } else {
             // No active subscription - check if user table has outdated status
@@ -320,14 +331,26 @@ class DashboardController extends Controller
                 'avatar' => $user->avatar,
                 'plan' => $planDisplayName,
                 'planStatus' => $planStatus,
-                'renewalDate' => $subscription && $subscription->expires_at ? $subscription->expires_at->format('Y-m-d') : ($user->renewal_date?->format('Y-m-d')),
+                'renewalDate' => $subscriptionIsActive
+                    ? $subscription->expires_at->format('Y-m-d')
+                    : ($legacySubscription?->end_date?->format('Y-m-d') ?? $user->renewal_date?->format('Y-m-d')),
             ],
-            'subscription' => $subscription ? [
+            'subscription' => $subscriptionIsActive ? [
                 'plan' => $subscription->subscriptionPlan->name ?? 'Unknown',
                 'status' => $subscription->status,
-                'started_at' => $subscription->started_at->toIso8601String(),
-                'expires_at' => $subscription->expires_at->toIso8601String(),
-            ] : null,
+                'started_at' => $subscription->started_at?->toIso8601String(),
+                'expires_at' => $subscription->expires_at?->toIso8601String(),
+            ] : ($legacySubscription ? [
+                'plan' => $legacySubscription->plan ?? 'PRO',
+                'status' => 'ACTIVE',
+                'started_at' => $legacySubscription->start_date?->toIso8601String(),
+                'expires_at' => $legacySubscription->end_date?->toIso8601String(),
+            ] : ($manualPlanIsActive ? [
+                'plan' => $user->plan,
+                'status' => 'ACTIVE',
+                'started_at' => null,
+                'expires_at' => $user->renewal_date?->toIso8601String(),
+            ] : null)),
             'pending_subscription' => $pendingSubscriptionPayment ? [
                 'plan' => $pendingSubscriptionPayment->subscriptionPlan->name ?? 'Unknown',
                 'status' => 'PENDING',

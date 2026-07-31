@@ -16,7 +16,7 @@ return new class extends Migration
         });
 
         // Make media_id nullable for creator-created seasons (tv_show_id is used instead)
-        if (Schema::hasColumn('seasons', 'media_id')) {
+        if (DB::getDriverName() === 'mysql' && Schema::hasColumn('seasons', 'media_id')) {
             Schema::table('seasons', function (Blueprint $table) {
                 $table->dropForeign(['media_id']);
             });

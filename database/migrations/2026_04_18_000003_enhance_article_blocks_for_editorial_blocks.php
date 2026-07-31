@@ -13,7 +13,9 @@ return new class extends Migration
             return;
         }
 
-        DB::statement("ALTER TABLE article_blocks MODIFY type ENUM('text', 'rich_text', 'image', 'quote', 'gallery', 'movie_embed', 'tv_show_embed', 'vj_embed', 'cta') NOT NULL");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE article_blocks MODIFY type ENUM('text', 'rich_text', 'image', 'quote', 'gallery', 'movie_embed', 'tv_show_embed', 'vj_embed', 'cta') NOT NULL");
+        }
 
         Schema::table('article_blocks', function (Blueprint $table) {
             if (! Schema::hasColumn('article_blocks', 'author_title')) {

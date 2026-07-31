@@ -10,14 +10,24 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use App\Services\CreatorContentWorkflowService;
+use App\Services\CreatorContentRules;
+use App\Services\CreatorMonetizationService;
 
 class CreatorMovieController extends CreatorBaseController
 {
+    public function __construct(
+        private readonly CreatorContentWorkflowService $workflow,
+        private readonly CreatorMonetizationService $monetization,
+        private readonly CreatorContentRules $rules
+    ) {
+    }
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -54,39 +64,11 @@ class CreatorMovieController extends CreatorBaseController
     {
         $user = $request->user();
 
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorCanSubmit($user)) {
             return $this->notCreator();
         }
 
-        $validated = $request->validate([
-            'title'            => ['required', 'string', 'max:255'],
-            'description'      => ['nullable', 'string'],
-            'release_date'     => ['nullable', 'date'],
-            'duration'         => ['nullable', 'string', 'max:20'],
-            'certificate'      => ['nullable', 'string', 'max:10'],
-            'country'          => ['nullable', 'string', 'max:100'],
-            'language'         => ['nullable', 'string', 'max:100'],
-            'original_language'=> ['nullable', 'string', 'max:100'],
-            'is_free'          => ['sometimes', 'boolean'],
-            'is_premium'       => ['sometimes', 'boolean'],
-            'price_rent'       => ['nullable', 'numeric', 'min:0'],
-            'price_buy'        => ['nullable', 'numeric', 'min:0'],
-            'genres'           => ['nullable', 'array'],
-            'genres.*'         => ['integer', 'exists:genres,id'],
-            'category_id'      => ['nullable', 'integer', 'exists:categories,id'],
-            'vj_id'            => ['nullable', 'integer', 'exists:vjs,id'],
-            'tmdb_id'          => ['nullable', 'integer'],
-            'tagline'          => ['nullable', 'string', 'max:500'],
-            'thumbnail'        => ['nullable', 'image', 'max:5120'],
-            'backdrop'         => ['nullable', 'image', 'max:10240'],
-            'thumbnail_url'    => ['nullable', 'string', 'max:2048'], // URL or storage path (e.g. tmdb/posters/xxx.jpg)
-            'backdrop_url'     => ['nullable', 'string', 'max:2048'],
-            'rating'           => ['nullable', 'numeric', 'min:0', 'max:10'],
-            'actors'           => ['nullable', 'array'],
-            'actors.*.actor_id'=> ['required_with:actors', 'integer', 'exists:actors,id'],
-            'actors.*.role'    => ['nullable', 'string', 'max:255'],
-            'actors.*.order'   => ['nullable', 'integer', 'min:0'],
-        ]);
+        $validated = $request->validate($this->rules->movie());
 
         // Handle image uploads
         $thumbnailPath = null;
@@ -104,7 +86,7 @@ class CreatorMovieController extends CreatorBaseController
 
         // Generate unique slug
         $slug = Str::slug($validated['title']);
-        if ($user->isVJ()) {
+        if ($this->resolveVjProfile($user)) {
             $vj = $this->resolveVjProfile($user);
             $slug = $slug . '-' . ($vj ? Str::slug($vj->name) : $user->id);
         }
@@ -135,25 +117,39 @@ class CreatorMovieController extends CreatorBaseController
             'backdrop'         => $backdropPath,
             'tmdb_id'          => $validated['tmdb_id'] ?? null,
             'tagline'          => $validated['tagline'] ?? null,
-            'rating'           => $validated['rating'] ?? null,
+            'rating'           => $validated['rating'] ?? 0,
+            'imdb_id'          => $validated['imdb_id'] ?? null,
+            'original_title'   => $validated['original_title'] ?? null,
+            'homepage'         => $validated['homepage'] ?? null,
+            'production_companies' => $validated['production_companies'] ?? null,
+            'production_countries' => $validated['production_countries'] ?? null,
+            'short_description' => $validated['short_description'] ?? null,
+            'director' => $validated['director'] ?? null,
+            'translation_language' => $validated['translation_language'] ?? null,
+            'trailer_url' => $validated['trailer_url'] ?? null,
+            'tags' => $validated['tags'] ?? null,
+            'seo_title' => $validated['seo_title'] ?? null,
+            'seo_description' => $validated['seo_description'] ?? null,
+            'download_enabled' => $validated['download_enabled'] ?? true,
+            'scheduled_for' => $validated['scheduled_for'] ?? null,
+            'ownership_declaration_accepted_at' => ! empty($validated['ownership_declaration']) ? now() : null,
             'is_active'        => false, // starts inactive until published
             'publish_status'   => 'draft',
         ];
 
         // Assign ownership
-        if ($user->isVJ()) {
+        if ($this->resolveVjProfile($user)) {
             $vj = $this->resolveVjProfile($user);
             $movieData['vj_id'] = $vj?->id;
-        } elseif ($user->isMediaLibrary()) {
+        } elseif ($this->resolveMediaLibraryProfile($user)) {
             $library = $this->resolveMediaLibraryProfile($user);
             $movieData['media_library_id'] = $library?->id;
-            // Media libraries can assign a VJ when creating VJ Translated content
-            $movieData['vj_id'] = $validated['vj_id'] ?? null;
         } elseif ($user->isAdmin()) {
             $movieData['vj_id'] = $validated['vj_id'] ?? null;
         }
 
         $movie = Movie::create($movieData);
+        $this->workflow->initialize($movie, $user, $user->isAdmin() ? 'administrator' : 'creator');
 
         // Sync genres
         if (!empty($validated['genres'])) {
@@ -168,6 +164,10 @@ class CreatorMovieController extends CreatorBaseController
             $movie->actors()->sync($sync);
         }
 
+        if (! empty($validated['monetization'])) {
+            $this->monetization->configure($movie, $user, $validated['monetization']);
+        }
+
         $movie->load(['genres', 'actors']);
 
         return response()->json([
@@ -180,7 +180,10 @@ class CreatorMovieController extends CreatorBaseController
     public function show(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        $movie = $this->creatorMovieQuery($user)->with(['genres', 'videoSources'])->find($id);
+        $movie = $this->creatorMovieQuery($user)->with([
+            'genres', 'actors', 'videoSources', 'subtitles', 'monetizationSetting',
+            'creatorReviews' => fn ($query) => $query->latest('reviewed_at'),
+        ])->find($id);
 
         if (!$movie) {
             return response()->json(['success' => false, 'message' => 'Movie not found.'], 404);
@@ -201,34 +204,7 @@ class CreatorMovieController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Movie not found or not authorized.'], 404);
         }
 
-        $validated = $request->validate([
-            'title'            => ['sometimes', 'string', 'max:255'],
-            'description'      => ['nullable', 'string'],
-            'release_date'     => ['nullable', 'date'],
-            'duration'         => ['nullable', 'string', 'max:20'],
-            'certificate'      => ['nullable', 'string', 'max:10'],
-            'country'          => ['nullable', 'string', 'max:100'],
-            'language'         => ['nullable', 'string', 'max:100'],
-            'original_language'=> ['nullable', 'string', 'max:100'],
-            'is_free'          => ['sometimes', 'boolean'],
-            'is_premium'       => ['sometimes', 'boolean'],
-            'price_rent'       => ['nullable', 'numeric', 'min:0'],
-            'price_buy'        => ['nullable', 'numeric', 'min:0'],
-            'genres'           => ['nullable', 'array'],
-            'genres.*'         => ['integer', 'exists:genres,id'],
-            'category_id'      => ['nullable', 'integer', 'exists:categories,id'],
-            'vj_id'            => ['nullable', 'integer', 'exists:vjs,id'],
-            'tagline'          => ['nullable', 'string', 'max:500'],
-            'thumbnail'        => ['nullable', 'image', 'max:5120'],
-            'backdrop'         => ['nullable', 'image', 'max:10240'],
-            'thumbnail_url'    => ['nullable', 'string', 'max:2048'],
-            'backdrop_url'     => ['nullable', 'string', 'max:2048'],
-            'rating'           => ['nullable', 'numeric', 'min:0', 'max:10'],
-            'actors'           => ['nullable', 'array'],
-            'actors.*.actor_id'=> ['required_with:actors', 'integer', 'exists:actors,id'],
-            'actors.*.role'    => ['nullable', 'string', 'max:255'],
-            'actors.*.order'   => ['nullable', 'integer', 'min:0'],
-        ]);
+        $validated = $request->validate($this->rules->movie(true));
 
         if ($request->hasFile('thumbnail')) {
             $validated['thumbnail'] = $request->file('thumbnail')->store('thumbnails', 'public');
@@ -248,12 +224,19 @@ class CreatorMovieController extends CreatorBaseController
         unset($validated['genres']);
         $actors = $validated['actors'] ?? null;
         unset($validated['actors']);
+        $monetization = $validated['monetization'] ?? null;
+        unset($validated['monetization']);
+        if (array_key_exists('ownership_declaration', $validated)) {
+            if ($validated['ownership_declaration']) {
+                $validated['ownership_declaration_accepted_at'] = now();
+            }
+            unset($validated['ownership_declaration']);
+        }
 
-        if ($user->isMediaLibrary() && array_key_exists('vj_id', $validated)) {
+        if ($user->isAdmin() && array_key_exists('vj_id', $validated)) {
             $movie->vj_id = $validated['vj_id'];
             unset($validated['vj_id']);
-        } elseif ($user->isAdmin() && array_key_exists('vj_id', $validated)) {
-            $movie->vj_id = $validated['vj_id'];
+        } else {
             unset($validated['vj_id']);
         }
 
@@ -262,6 +245,18 @@ class CreatorMovieController extends CreatorBaseController
 
         if ($genres !== null) {
             $movie->genres()->sync($genres);
+        }
+        if ($actors !== null) {
+            $sync = collect($actors)->mapWithKeys(function ($actor, $index) {
+                return [$actor['actor_id'] => [
+                    'role' => $actor['role'] ?? null,
+                    'order' => $actor['order'] ?? $index,
+                ]];
+            })->toArray();
+            $movie->actors()->sync($sync);
+        }
+        if ($monetization !== null) {
+            $this->monetization->configure($movie, $user, $monetization);
         }
 
         $movie->load('genres');
@@ -296,13 +291,19 @@ class CreatorMovieController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Movie not found or not authorized.'], 404);
         }
 
-        // For admins — auto-publish; for creators — set pending review
         if ($user->isAdmin()) {
-            $movie->update(['publish_status' => 'published', 'is_active' => true]);
+            $this->workflow->moderate($movie, $user, 'approved');
+            $movie->update([
+                'publication_status' => 'published',
+                'publish_status' => 'published',
+                'published_by' => $user->id,
+                'published_at' => now(),
+                'is_active' => true,
+            ]);
             $message = 'Movie published.';
             event(new MoviePublished($movie->fresh()));
         } else {
-            $movie->update(['publish_status' => 'pending_review']);
+            $this->workflow->submitForReview($movie, $user, $request->boolean('publish_after_approval'));
             $message = 'Movie submitted for review. Admin will review and publish it.';
         }
 

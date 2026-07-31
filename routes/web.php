@@ -12,9 +12,9 @@ Route::get('/', function () {
 // SEO Routes - These serve SEO-optimized HTML for crawlers and social media
 // They redirect to Next.js for actual user experience
 Route::get('/movie/{slug}', [SeoController::class, 'movie'])->name('seo.movie');
-Route::get('/movies/{slug}', [SeoController::class, 'movie'])->name('seo.movies'); // Alias for Next.js route structure
+Route::get('/movies/{slug}', [SeoController::class, 'movie'])->name('seo.movies.show'); // Alias for Next.js route structure
 Route::get('/tv/{slug}', [SeoController::class, 'tv'])->name('seo.tv');
-Route::get('/tv-shows/{slug}', [SeoController::class, 'tv'])->name('seo.tv-shows'); // Alias for Next.js route structure
+Route::get('/tv-shows/{slug}', [SeoController::class, 'tv'])->name('seo.tv-shows.show'); // Alias for Next.js route structure
 Route::get('/vj/{slug}', [SeoController::class, 'vj'])->name('seo.vj');
 Route::get('/vjs/{slug}', [SeoController::class, 'vj'])->name('seo.vjs'); // Alias for Next.js route structure
 Route::get('/vjs', [SeoController::class, 'vjs'])->name('seo.vjs-listing');

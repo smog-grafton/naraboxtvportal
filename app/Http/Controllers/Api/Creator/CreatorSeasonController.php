@@ -7,11 +7,17 @@ use App\Models\Season;
 use App\Services\TmdbService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use App\Services\CreatorContentWorkflowService;
+use App\Services\CreatorContentRules;
+use Illuminate\Support\Facades\DB;
 
 class CreatorSeasonController extends CreatorBaseController
 {
-    public function __construct(private readonly TmdbService $tmdb)
-    {
+    public function __construct(
+        private readonly TmdbService $tmdb,
+        private readonly CreatorContentWorkflowService $workflow,
+        private readonly CreatorContentRules $rules
+    ) {
     }
 
     /**
@@ -26,12 +32,7 @@ class CreatorSeasonController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'TV show not found.'], 404);
         }
 
-        $validated = $request->validate([
-            'season_number' => ['required', 'integer', 'min:1'],
-            'title' => ['nullable', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'air_date' => ['nullable', 'date'],
-        ]);
+        $validated = $request->validate($this->rules->season());
 
         if (Season::where('tv_show_id', $show->id)->where('number', $validated['season_number'])->exists()) {
             return response()->json(['success' => false, 'message' => 'Season ' . $validated['season_number'] . ' already exists.'], 422);
@@ -103,7 +104,7 @@ class CreatorSeasonController extends CreatorBaseController
                 $epNum = (int) ($ep['episode_number'] ?? 0);
                 if ($epNum < 1) continue;
 
-                Episode::create([
+                $episode = Episode::create([
                     'season_id' => $season->id,
                     'number' => $epNum,
                     'title' => $ep['name'] ?? 'Episode ' . $epNum,
@@ -111,6 +112,7 @@ class CreatorSeasonController extends CreatorBaseController
                     'duration' => isset($ep['runtime']) && $ep['runtime'] ? $ep['runtime'] . ' min' : null,
                     'thumbnail' => $this->tmdb->getImageUrl($ep['still_path'] ?? null, 'w342'),
                 ]);
+                $this->workflow->initialize($episode, $user, 'tmdb_import');
             }
             $created++;
         }
@@ -141,26 +143,32 @@ class CreatorSeasonController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Not authorized.'], 403);
         }
 
-        $validated = $request->validate([
-            'episode_number' => ['required', 'integer', 'min:1'],
-            'title' => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'duration' => ['nullable', 'string', 'max:20'],
-            'thumbnail' => ['nullable', 'string', 'max:2048'],
-        ]);
+        $validated = $request->validate($this->rules->episode());
 
         if (Episode::where('season_id', $season->id)->where('number', $validated['episode_number'])->exists()) {
             return response()->json(['success' => false, 'message' => 'Episode ' . $validated['episode_number'] . ' already exists.'], 422);
         }
 
+        $thumbnail = $validated['thumbnail'] ?? null;
+        if ($request->hasFile('thumbnail_file')) {
+            $thumbnail = $request->file('thumbnail_file')->store('episode-thumbnails', 'public');
+        }
         $episode = Episode::create([
             'season_id' => $season->id,
             'number' => $validated['episode_number'],
             'title' => $validated['title'],
             'description' => $validated['description'] ?? null,
+            'short_description' => $validated['short_description'] ?? null,
             'duration' => $validated['duration'] ?? null,
-            'thumbnail' => $validated['thumbnail'] ?? null,
+            'release_date' => $validated['release_date'] ?? null,
+            'translation_language' => $validated['translation_language'] ?? null,
+            'thumbnail' => $thumbnail,
+            'download_enabled' => $validated['download_enabled'] ?? true,
+            'scheduled_for' => $validated['scheduled_for'] ?? null,
+            'tags' => $validated['tags'] ?? null,
+            'is_active' => false,
         ]);
+        $this->workflow->initialize($episode, $user, $user->isAdmin() ? 'administrator' : 'creator');
 
         $this->refreshTvShowCounts($show);
 
@@ -188,12 +196,12 @@ class CreatorSeasonController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Not authorized.'], 403);
         }
 
-        $validated = $request->validate([
-            'title' => ['nullable', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'air_date' => ['nullable', 'date'],
-        ]);
+        $validated = $request->validate($this->rules->season(true));
 
+        if (array_key_exists('season_number', $validated)) {
+            $validated['number'] = $validated['season_number'];
+            unset($validated['season_number']);
+        }
         $season->fill($validated);
         $season->save();
 
@@ -221,13 +229,16 @@ class CreatorSeasonController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Not authorized.'], 403);
         }
 
-        $validated = $request->validate([
-            'title' => ['nullable', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'duration' => ['nullable', 'string', 'max:20'],
-            'thumbnail' => ['nullable', 'string', 'max:2048'],
-        ]);
+        $validated = $request->validate($this->rules->episode(true));
 
+        if (array_key_exists('episode_number', $validated)) {
+            $validated['number'] = $validated['episode_number'];
+            unset($validated['episode_number']);
+        }
+        if ($request->hasFile('thumbnail_file')) {
+            $validated['thumbnail'] = $request->file('thumbnail_file')->store('episode-thumbnails', 'public');
+        }
+        unset($validated['thumbnail_file']);
         $episode->fill($validated);
         $episode->save();
 
@@ -284,6 +295,100 @@ class CreatorSeasonController extends CreatorBaseController
         return response()->json(['success' => true, 'message' => 'Episode deleted.']);
     }
 
+    public function duplicateEpisode(Request $request, int $episodeId): JsonResponse
+    {
+        $user = $request->user();
+        $episode = Episode::with('season')->findOrFail($episodeId);
+        abort_unless(
+            $episode->season
+            && $this->creatorTvShowQuery($user)->whereKey($episode->season->tv_show_id)->exists(),
+            404
+        );
+        $validated = $request->validate([
+            'episode_number' => ['nullable', 'integer', 'min:1', 'max:10000'],
+        ]);
+        $number = (int) ($validated['episode_number']
+            ?? (Episode::where('season_id', $episode->season_id)->max('number') + 1));
+        abort_if(
+            Episode::where('season_id', $episode->season_id)->where('number', $number)->exists(),
+            422,
+            "Episode {$number} already exists."
+        );
+
+        $copy = $episode->replicate([
+            'submitted_by', 'creator_application_id', 'processing_status',
+            'editorial_status', 'publication_status', 'monetization_status',
+            'submitted_for_review_at', 'approved_by', 'approved_at', 'published_by',
+            'published_at', 'moderation_notes',
+        ]);
+        $copy->number = $number;
+        $copy->title = $episode->title.' (Copy)';
+        $copy->video_url = null;
+        $copy->is_active = false;
+        $copy->save();
+        $this->workflow->initialize($copy, $user, 'duplicate_metadata');
+        $this->refreshTvShowCounts($episode->season->tvShow);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Episode metadata duplicated. Add its own media source before review.',
+            'data' => $this->formatEpisode($copy),
+        ], 201);
+    }
+
+    public function reorderEpisodes(Request $request, int $seasonId): JsonResponse
+    {
+        $user = $request->user();
+        $season = Season::with('tvShow')->findOrFail($seasonId);
+        abort_unless(
+            $season->tvShow
+            && $this->creatorTvShowQuery($user)->whereKey($season->tv_show_id)->exists(),
+            404
+        );
+        $validated = $request->validate([
+            'episodes' => ['required', 'array', 'min:1'],
+            'episodes.*.id' => ['required', 'integer'],
+            'episodes.*.episode_number' => ['required', 'integer', 'min:1', 'max:10000', 'distinct'],
+        ]);
+        $ownedIds = $season->episodes()->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+        $requestedIds = collect($validated['episodes'])->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();
+        abort_unless($ownedIds === $requestedIds, 422, 'The reorder list must contain every episode in this season exactly once.');
+
+        DB::transaction(function () use ($validated, $season): void {
+            foreach ($validated['episodes'] as $index => $entry) {
+                Episode::where('season_id', $season->id)->whereKey($entry['id'])->update(['number' => -($index + 1)]);
+            }
+            foreach ($validated['episodes'] as $entry) {
+                Episode::where('season_id', $season->id)->whereKey($entry['id'])->update(['number' => $entry['episode_number']]);
+            }
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Episode order saved.',
+            'data' => $this->formatSeason($season->refresh()),
+        ]);
+    }
+
+    public function publishEpisode(Request $request, int $episodeId): JsonResponse
+    {
+        $user = $request->user();
+        $episode = Episode::with('season')->findOrFail($episodeId);
+        abort_unless(
+            $episode->season
+            && $this->creatorTvShowQuery($user)->whereKey($episode->season->tv_show_id)->exists(),
+            404
+        );
+
+        $this->workflow->submitForReview($episode, $user, $request->boolean('publish_after_approval'));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Episode submitted for review.',
+            'data' => $this->formatEpisode($episode->refresh()),
+        ]);
+    }
+
     private function refreshTvShowCounts($show): void
     {
         $show->refresh();
@@ -317,7 +422,16 @@ class CreatorSeasonController extends CreatorBaseController
             'description' => $episode->description,
             'duration' => $episode->duration,
             'thumbnail' => $episode->thumbnail,
-            'is_active' => true,
+            'release_date' => $episode->release_date?->format('Y-m-d'),
+            'translation_language' => $episode->translation_language,
+            'short_description' => $episode->short_description,
+            'tags' => $episode->tags ?? [],
+            'download_enabled' => (bool) $episode->download_enabled,
+            'is_active' => (bool) $episode->is_active,
+            'processing_status' => $episode->processing_status ?? 'not_started',
+            'editorial_status' => $episode->editorial_status ?? 'not_submitted',
+            'publication_status' => $episode->publication_status ?? 'draft',
+            'monetization_status' => $episode->monetization_status ?? 'disabled',
             'sources_count' => $episode->relationLoaded('videoSources') ? $episode->videoSources->count() : $episode->videoSources()->count(),
             'sources' => $episode->relationLoaded('videoSources')
                 ? $episode->videoSources->map(fn($source) => $this->formatVideoSource($source))

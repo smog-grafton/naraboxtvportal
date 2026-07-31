@@ -177,7 +177,7 @@ The backend:
 
 ## 4. Apple login (mobile)
 
-Apple Sign-In is handled by the mobile app, which sends the verified Apple user id (and optionally email/name) to the backend:
+Apple Sign-In is handled by the mobile app, which sends the Apple identity token to the backend. The backend verifies the token against Apple public keys and accepts only audiences configured in `APPLE_CLIENT_IDS`.
 
 ```http
 POST /api/v1/auth/apple/mobile
@@ -185,20 +185,23 @@ Content-Type: application/json
 X-API-KEY: <APP_API_KEY>
 
 {
-  "apple_user_id": "<apple_sub>",
+  "identity_token": "<apple_identity_token>",
   "email": "jane@example.com", // optional, only provided first time
   "name": "Jane Doe"           // optional
 }
 ```
 
+Older mobile builds may still send `apple_user_id` instead of `identity_token`, but new builds should send `identity_token`.
+
 - **200:** Common auth payload with `auth_provider: "apple"` and `is_new_user` set appropriately.
 - **422:** Validation error.
-- **500:** If customer role is missing or an internal error occurs.
+- **500:** If `APPLE_CLIENT_IDS` is missing, customer role is missing, or an internal error occurs.
 
 Backend behavior:
 
 - Tries to find an existing `social_accounts` record for Apple, then an existing user by email, else creates a new `FREE` user.
 - Ensures a `social_accounts` record exists (`provider = apple`).
+- If Apple does not provide email on a later sign-in, the backend can still login by Apple `sub`; for first-time Apple users with no email, it creates an internal placeholder email ending in `@apple-auth.local`.
 
 ## 5. Using the token
 

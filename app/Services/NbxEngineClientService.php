@@ -23,6 +23,34 @@ class NbxEngineClientService
         return $this->normalizeResponse($this->client()->post('/api/v1/nbx/jobs', $payload));
     }
 
+    public function createTelegramJob(array $payload): array
+    {
+        $payload['input_type'] = 'telegram';
+
+        return $this->normalizeResponse($this->client()->post('/api/v1/nbx/jobs', $payload));
+    }
+
+    public function registerStorageReference(array $payload): array
+    {
+        return $this->normalizeResponse($this->client(5, 30)->post('/api/v1/storage/references', $payload));
+    }
+
+    public function runAction(string $jobId, string $operation, array $payload = []): array
+    {
+        return $this->normalizeResponse($this->client()->post(
+            '/api/v1/nbx/jobs/'.rawurlencode($jobId).'/actions',
+            array_merge($payload, ['operation' => $operation]),
+        ));
+    }
+
+    public function deleteOriginal(string $jobId, string $idempotencyKey): array
+    {
+        return $this->normalizeResponse($this->client()->delete(
+            '/api/v1/nbx/jobs/'.rawurlencode($jobId).'/original',
+            ['idempotency_key' => $idempotencyKey],
+        ));
+    }
+
     public function uploadFromStoragePath(string $disk, string $path, array $payload): array
     {
         if (! Storage::disk($disk)->exists($path)) {
@@ -65,7 +93,7 @@ class NbxEngineClientService
 
     public function getJob(string $jobId): array
     {
-        return $this->normalizeResponse($this->client(5, 30)->get('/api/v1/nbx/jobs/' . rawurlencode($jobId)));
+        return $this->normalizeResponse($this->client(5, 30)->get('/api/v1/nbx/jobs/'.rawurlencode($jobId)));
     }
 
     public function discover(array $query): array

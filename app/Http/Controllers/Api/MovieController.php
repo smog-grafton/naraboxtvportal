@@ -7,9 +7,10 @@ use App\Models\Episode;
 use App\Models\Movie;
 use App\Models\TVShow;
 use App\Models\VideoSource;
+use App\Services\MediaSourceSelectionService;
 use App\Services\SimilarTitlesService;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * @group Movies
@@ -48,7 +49,7 @@ class MovieController extends Controller
             $categoryParam = $request->get('category');
             $query->whereHas('category', function ($q) use ($categoryParam) {
                 $q->where('slug', $categoryParam)
-                  ->orWhere('name', $categoryParam);
+                    ->orWhere('name', $categoryParam);
             });
         }
 
@@ -60,7 +61,7 @@ class MovieController extends Controller
             $genreParam = $request->get('genre');
             $query->whereHas('genres', function ($q) use ($genreParam) {
                 $q->where('slug', $genreParam)
-                  ->orWhere('name', $genreParam);
+                    ->orWhere('name', $genreParam);
             });
         }
 
@@ -71,11 +72,11 @@ class MovieController extends Controller
             $vjParam = $request->get('vj');
             $query->whereHas('vj', function ($q) use ($vjParam) {
                 $q->where('is_active', true)
-                  ->where(function ($subQ) use ($vjParam) {
-                      $subQ->where('slug', $vjParam)
-                           ->orWhere('id', $vjParam)
-                           ->orWhere('name', $vjParam);
-                  });
+                    ->where(function ($subQ) use ($vjParam) {
+                        $subQ->where('slug', $vjParam)
+                            ->orWhere('id', $vjParam)
+                            ->orWhere('name', $vjParam);
+                    });
             });
         }
 
@@ -102,13 +103,13 @@ class MovieController extends Controller
         // Rental catalog (?filter=rent)
         if ($filter === 'rent') {
             $query->whereNotNull('price_rent')
-                  ->where('price_rent', '>', 0);
+                ->where('price_rent', '>', 0);
         }
 
         // Purchase catalog (?filter=purchase)
         if ($filter === 'purchase') {
             $query->whereNotNull('price_buy')
-                  ->where('price_buy', '>', 0);
+                ->where('price_buy', '>', 0);
         }
 
         // Premium subscription catalog (?filter=premium)
@@ -123,27 +124,32 @@ class MovieController extends Controller
 
         // Handle sorting
         $sort = $request->get('sort', 'trending');
-        $order = $request->get('order', 'desc');
-        
+        $order = strtolower((string) $request->get('order', 'desc')) === 'asc' ? 'asc' : 'desc';
+
         if ($sort === 'latest') {
-            $query->orderBy('created_at', $order);
+            // Publication time is the customer-facing definition of "latest".
+            // created_at is only a fallback for legacy rows imported before
+            // published_at existed.
+            $query->orderByRaw("COALESCE(published_at, created_at) {$order}");
         } elseif ($sort === 'trending') {
             // Trending based on total views (views_count + manual_views)
             $query->orderByRaw('(views_count + manual_views) DESC');
         } elseif ($sort === 'rating') {
             $query->orderBy('rating', $order);
+        } elseif ($sort === 'title') {
+            $query->orderBy('title', $order);
         } else {
             // Default: trending by views
             $query->orderByRaw('(views_count + manual_views) DESC');
         }
-        
+
         // Secondary sort by created_at for consistency
         $query->orderBy('created_at', 'desc');
-        
+
         $movies = $query->paginate($request->get('per_page', 20));
 
         return response()->json([
-            'data' => $movies->map(fn($m) => $this->formatMovieSummary($m)),
+            'data' => $movies->map(fn ($m) => $this->formatMovieSummary($m)),
             'meta' => [
                 'current_page' => $movies->currentPage(),
                 'last_page' => $movies->lastPage(),
@@ -160,11 +166,11 @@ class MovieController extends Controller
             ->with(['genres', 'vj.genres', 'mediaLibrary', 'category', 'actors', 'videoSources', 'seasons.episodes.videoSources'])
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)
-                      ->orWhere('slug', $id);
+                    ->orWhere('slug', $id);
             })
             ->first();
 
-        if (!$movie) {
+        if (! $movie) {
             return response()->json(['message' => 'Movie not found'], 404);
         }
 
@@ -188,11 +194,11 @@ class MovieController extends Controller
         $movie = Movie::where('is_active', true)
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)
-                      ->orWhere('slug', $id);
+                    ->orWhere('slug', $id);
             })
             ->first();
 
-        if (!$movie) {
+        if (! $movie) {
             return response()->json(['message' => 'Movie not found'], 404);
         }
 
@@ -201,9 +207,12 @@ class MovieController extends Controller
 
         return response()->json([
             'data' => $results->map(function ($item) {
-                return $item instanceof TVShow
+                $payload = $item instanceof TVShow
                     ? app(TVShowController::class)->formatTVShowSummary($item)
                     : $this->formatMovieSummary($item);
+                $payload['recommendation_reason'] = $item->recommendation_reason ?? 'Because you watched this';
+
+                return $payload;
             })->values(),
         ]);
     }
@@ -217,27 +226,29 @@ class MovieController extends Controller
 
         // Handle sorting (same as index method)
         $sort = $request->get('sort', 'trending');
-        $order = $request->get('order', 'desc');
-        
+        $order = strtolower((string) $request->get('order', 'desc')) === 'asc' ? 'asc' : 'desc';
+
         if ($sort === 'latest') {
-            $query->orderBy('created_at', $order);
+            $query->orderByRaw("COALESCE(published_at, created_at) {$order}");
         } elseif ($sort === 'trending') {
             // Trending based on total views (views_count + manual_views)
             $query->orderByRaw('(views_count + manual_views) DESC');
         } elseif ($sort === 'rating') {
             $query->orderBy('rating', $order);
+        } elseif ($sort === 'title') {
+            $query->orderBy('title', $order);
         } else {
             // Default: trending by views
             $query->orderByRaw('(views_count + manual_views) DESC');
         }
-        
+
         // Secondary sort by created_at for consistency
         $query->orderBy('created_at', 'desc');
 
         $series = $query->paginate($request->get('per_page', 20));
 
         return response()->json([
-            'data' => $series->map(fn($s) => $this->formatMovieSummary($s)),
+            'data' => $series->map(fn ($s) => $this->formatMovieSummary($s)),
             'meta' => [
                 'current_page' => $series->currentPage(),
                 'last_page' => $series->lastPage(),
@@ -250,7 +261,7 @@ class MovieController extends Controller
     public function search(Request $request)
     {
         $query = $request->get('q', '');
-        
+
         if (empty($query)) {
             return response()->json(['data' => [], 'meta' => []]);
         }
@@ -260,7 +271,7 @@ class MovieController extends Controller
             ->publiclyVisible()
             ->where(function ($q) use ($query) {
                 $q->where('title', 'like', "%{$query}%")
-                  ->orWhere('description', 'like', "%{$query}%");
+                    ->orWhere('description', 'like', "%{$query}%");
             })
             ->with(['genres', 'vj', 'mediaLibrary', 'category', 'videoSources'])
             ->limit(20)
@@ -281,7 +292,7 @@ class MovieController extends Controller
         }
 
         // Cache key per day
-        $cacheKey = 'movies_selected_today_' . now()->toDateString();
+        $cacheKey = 'movies_selected_today_'.now()->toDateString();
 
         $secondsUntilMidnight = now()->endOfDay()->diffInSeconds(now());
 
@@ -298,6 +309,7 @@ class MovieController extends Controller
             if ($pool->isEmpty()) {
                 /** @var \Illuminate\Support\Collection<int, \App\Models\Movie> $empty */
                 $empty = collect();
+
                 return $empty;
             }
 
@@ -312,11 +324,14 @@ class MovieController extends Controller
     public function formatMovieSummary(Movie $movie): array
     {
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
 
         $status = $movie->content_status ?? 'published';
@@ -373,11 +388,14 @@ class MovieController extends Controller
     {
         // Helper to get full URL for images
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
 
         $status = $movie->content_status ?? 'published';
@@ -427,22 +445,22 @@ class MovieController extends Controller
                 ? []
                 : $movie->trailers()->where('is_active', true)->get()->map(function ($trailer) {
                     return [
-                    'id' => $trailer->id,
-                    'name' => $trailer->name,
-                    'key' => $trailer->key,
-                    'youtubeUrl' => $trailer->youtube_url,
-                    'embedUrl' => $trailer->embed_url,
-                    'type' => $trailer->type,
-                ];
-            }),
-            'crew' => [
-                'directors' => $movie->crew()->where('job', 'Director')->get()->map(function ($crew) {
-                    return [
-                        'name' => $crew->name,
-                        'profileImage' => $crew->profile_image,
+                        'id' => $trailer->id,
+                        'name' => $trailer->name,
+                        'key' => $trailer->key,
+                        'youtubeUrl' => $trailer->youtube_url,
+                        'embedUrl' => $trailer->embed_url,
+                        'type' => $trailer->type,
                     ];
                 }),
-            ],
+            'crew' => [
+                    'directors' => $movie->crew()->where('job', 'Director')->get()->map(function ($crew) {
+                        return [
+                            'name' => $crew->name,
+                            'profileImage' => $crew->profile_image,
+                        ];
+                    }),
+                ],
             'keywords' => $movie->keywords->pluck('name')->toArray(),
             'cast' => $movie->actors->map(function ($actor) use ($getImageUrl) {
                 return [
@@ -468,7 +486,7 @@ class MovieController extends Controller
                         ];
                     })->toArray(),
                 ];
-            })            ->toArray(),
+            })->toArray(),
         ];
 
         if ($isRestricted) {
@@ -480,6 +498,11 @@ class MovieController extends Controller
 
     private function resolvePlayableVideoUrl(Movie|Episode $sourceable): ?string
     {
+        $preferred = app(MediaSourceSelectionService::class)->preferredFor($sourceable);
+        if ($preferred) {
+            return app(MediaSourceSelectionService::class)->sourceUrl($preferred);
+        }
+
         $legacyUrl = trim((string) ($sourceable->video_url ?? ''));
         if ($legacyUrl !== '') {
             return $legacyUrl;
@@ -532,11 +555,14 @@ class MovieController extends Controller
     private function formatCreator(Movie $movie): ?array
     {
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
         if ($movie->mediaLibrary) {
             return [
@@ -566,6 +592,7 @@ class MovieController extends Controller
                 'translatedCount' => $movie->vj->translated_count ? (int) $movie->vj->translated_count : null,
             ];
         }
+
         return null;
     }
 }

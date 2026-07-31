@@ -6,6 +6,8 @@ use App\Filament\Resources\MediaLibraryResource\Pages;
 use App\Models\MediaLibrary;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Infolists;
+use Filament\Infolists\Infolist;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -16,11 +18,49 @@ class MediaLibraryResource extends Resource
     protected static ?string $model = MediaLibrary::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-archive-box';
+
     protected static ?string $navigationLabel = 'Media Libraries';
+
     protected static ?string $modelLabel = 'Media Library';
+
     protected static ?string $pluralModelLabel = 'Media Libraries';
+
     protected static ?string $navigationGroup = 'Creator Management';
+
     protected static ?int $navigationSort = 3;
+
+    public static function infolist(Infolist $infolist): Infolist
+    {
+        return $infolist->schema([
+            Infolists\Components\Section::make('Library identity')
+                ->schema([
+                    Infolists\Components\ImageEntry::make('image')->circular(),
+                    Infolists\Components\TextEntry::make('name'),
+                    Infolists\Components\TextEntry::make('slug')->copyable(),
+                    Infolists\Components\TextEntry::make('location'),
+                    Infolists\Components\TextEntry::make('public_email')->copyable(),
+                    Infolists\Components\TextEntry::make('languages')->badge()->separator(','),
+                    Infolists\Components\TextEntry::make('bio')->columnSpanFull(),
+                    Infolists\Components\KeyValueEntry::make('official_links')->columnSpanFull(),
+                ])->columns(2),
+            Infolists\Components\Section::make('Creator account and readiness')
+                ->schema([
+                    Infolists\Components\TextEntry::make('user.name')->label('Linked account'),
+                    Infolists\Components\TextEntry::make('user.email')->label('Account email')->copyable(),
+                    Infolists\Components\TextEntry::make('application_status')
+                        ->label('Creator application')
+                        ->getStateUsing(fn (MediaLibrary $record) => $record->user?->creatorApplication?->status ?? 'Not linked')
+                        ->badge(),
+                    Infolists\Components\TextEntry::make('wallet_status')
+                        ->label('Wallet')
+                        ->getStateUsing(fn (MediaLibrary $record) => $record->user?->creatorWallet?->status ?? 'Not created')
+                        ->badge(),
+                    Infolists\Components\IconEntry::make('is_active')->boolean(),
+                    Infolists\Components\IconEntry::make('is_verified')->boolean(),
+                    Infolists\Components\IconEntry::make('is_featured')->boolean(),
+                ])->columns(2),
+        ]);
+    }
 
     public static function form(Form $form): Form
     {
@@ -46,6 +86,13 @@ class MediaLibraryResource extends Resource
                             ->helperText('Optional: Link to a user account'),
                         Forms\Components\Textarea::make('bio')
                             ->rows(4)
+                            ->columnSpanFull(),
+                        Forms\Components\TagsInput::make('languages'),
+                        Forms\Components\TextInput::make('location')->maxLength(255),
+                        Forms\Components\TextInput::make('public_email')->email()->maxLength(255),
+                        Forms\Components\KeyValue::make('official_links')
+                            ->keyLabel('Network')
+                            ->valueLabel('Public URL')
                             ->columnSpanFull(),
                     ])->columns(2),
 
@@ -100,7 +147,7 @@ class MediaLibraryResource extends Resource
                     ->label('Photo')
                     ->size(50)
                     ->circular()
-                    ->defaultImageUrl(fn ($record) => 'https://ui-avatars.com/api/?name=' . urlencode($record->name ?? '')),
+                    ->defaultImageUrl(fn ($record) => 'https://ui-avatars.com/api/?name='.urlencode($record->name ?? '')),
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()
                     ->sortable()
@@ -113,6 +160,19 @@ class MediaLibraryResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->placeholder('—'),
+                Tables\Columns\TextColumn::make('user.email')
+                    ->label('Account email')
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('application_status')
+                    ->label('Application')
+                    ->getStateUsing(fn (MediaLibrary $record) => $record->user?->creatorApplication?->status ?? 'not_linked')
+                    ->badge(),
+                Tables\Columns\TextColumn::make('wallet_status')
+                    ->label('Wallet')
+                    ->getStateUsing(fn (MediaLibrary $record) => $record->user?->creatorWallet?->status ?? 'not_created')
+                    ->badge()
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('movies_count')
                     ->label('Movies')
                     ->counts('movies')
@@ -147,6 +207,9 @@ class MediaLibraryResource extends Resource
                     ->label('Verified'),
                 Tables\Filters\TernaryFilter::make('is_featured')
                     ->label('Featured'),
+                Tables\Filters\Filter::make('linked_creator')
+                    ->label('Has linked creator')
+                    ->query(fn ($query) => $query->whereNotNull('user_id')),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
@@ -164,7 +227,10 @@ class MediaLibraryResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            \App\Filament\Resources\VJResource\RelationManagers\MoviesRelationManager::class,
+            \App\Filament\Resources\VJResource\RelationManagers\TVShowsRelationManager::class,
+            \App\Filament\Resources\VJResource\RelationManagers\ClaimsRelationManager::class,
+            \App\Filament\Resources\VJResource\RelationManagers\OwnershipHistoryRelationManager::class,
         ];
     }
 

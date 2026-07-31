@@ -7,57 +7,42 @@ use App\Models\User;
 
 class TVShowPolicy
 {
-    public function viewAny(User $user): bool
+    public function before(User $user): ?bool
     {
-        return true;
+        return $user->isAdmin() ? true : null;
     }
 
-    public function view(User $user, TVShow $tvShow): bool
+    public function viewAny(User $user): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $tvShow);
+        return $user->hasCreatorWorkspace();
+    }
+
+    public function view(User $user, TVShow $show): bool
+    {
+        return $this->owns($user, $show);
     }
 
     public function create(User $user): bool
     {
-        return $user->isAdmin() || $user->isCreator();
+        return $user->hasCreatorWorkspace()
+            && ($user->creatorPermission?->draft_submission_enabled ?? true);
     }
 
-    public function update(User $user, TVShow $tvShow): bool
+    public function update(User $user, TVShow $show): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $tvShow);
+        return $this->owns($user, $show)
+            && ! in_array($show->publication_status, ['suspended', 'archived'], true);
     }
 
-    public function delete(User $user, TVShow $tvShow): bool
+    public function delete(User $user, TVShow $show): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $tvShow);
+        return $this->update($user, $show);
     }
 
-    public function manageSource(User $user, TVShow $tvShow): bool
+    private function owns(User $user, TVShow $show): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $tvShow);
-    }
-
-    public function publish(User $user, TVShow $tvShow): bool
-    {
-        return $user->isAdmin() || $this->isOwner($user, $tvShow);
-    }
-
-    private function isOwner(User $user, TVShow $tvShow): bool
-    {
-        if ($user->isVJ()) {
-            $vj = $user->vjProfile;
-            if ($vj && $tvShow->vj_id === $vj->id) {
-                return true;
-            }
-        }
-
-        if ($user->isMediaLibrary()) {
-            $library = $user->mediaLibraryProfile;
-            if ($library && $tvShow->media_library_id === $library->id) {
-                return true;
-            }
-        }
-
-        return false;
+        return $show->submitted_by === $user->id
+            || ($user->vjProfile && $show->vj_id === $user->vjProfile->id)
+            || ($user->mediaLibraryProfile && $show->media_library_id === $user->mediaLibraryProfile->id);
     }
 }

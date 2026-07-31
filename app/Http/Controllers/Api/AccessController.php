@@ -5,10 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Movie;
 use App\Models\TVShow;
-use App\Models\UserRental;
-use App\Models\UserPurchase;
-use App\Models\UserSubscription;
-use App\Services\PendingPaymentResolverService;
+use App\Services\MediaAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -20,9 +17,8 @@ use Illuminate\Support\Facades\Auth;
 class AccessController extends Controller
 {
     public function __construct(
-        private readonly PendingPaymentResolverService $pendingPaymentResolver,
-    ) {
-    }
+        private readonly MediaAccessService $mediaAccess,
+    ) {}
 
     /**
      * Check if user has access to a movie or TV show
@@ -52,14 +48,12 @@ class AccessController extends Controller
      *  "access_type": "FREE",
      *  "reason": "Content is free"
      * }
-     *
      * @response 200 scenario="Premium with active subscription" {
      *  "has_access": true,
      *  "access_type": "SUBSCRIPTION",
      *  "reason": "You have an active subscription",
      *  "subscription_expires_at": "2026-03-31T20:00:00+03:00"
      * }
-     *
      * @response 200 scenario="Paid but not yet rented/bought" {
      *  "has_access": false,
      *  "access_type": "PAID",
@@ -69,14 +63,12 @@ class AccessController extends Controller
      *  "rent_price": 1000,
      *  "buy_price": 2200
      * }
-     *
      * @response 401 {
      *  "has_access": false,
      *  "access_type": null,
      *  "reason": "Authentication required",
      *  "requires_auth": true
      * }
-     *
      * @response 404 {
      *  "error": "Media not found"
      * }
@@ -85,7 +77,7 @@ class AccessController extends Controller
     {
         // Resolve user from Bearer token when present (route has no auth middleware)
         $user = Auth::guard('sanctum')->user();
-        
+
         $request->validate([
             'media_id' => 'required|integer',
             'media_type' => 'required|in:MOVIE,TV_SHOW',
@@ -95,144 +87,24 @@ class AccessController extends Controller
         $mediaType = $request->media_type;
 
         // Get the media item
-        $media = $mediaType === 'MOVIE' 
+        $media = $mediaType === 'MOVIE'
             ? Movie::find($mediaId)
             : TVShow::find($mediaId);
 
-        if (!$media) {
+        if (! $media) {
             return response()->json(['error' => 'Media not found'], 404);
         }
 
-        // Check if content is free
-        if ($media->is_free) {
-            return response()->json([
-                'has_access' => true,
-                'access_type' => 'FREE',
-                'reason' => 'Content is free',
-            ]);
-        }
+        $result = $this->mediaAccess->evaluate($media, $user);
+        unset($result['http_status']);
 
-        // If no user, check if content requires authentication
-        if (!$user) {
-            return response()->json([
-                'has_access' => false,
-                'access_type' => null,
-                'reason' => 'Authentication required',
-                'requires_auth' => true,
-            ]);
-        }
-
-        // PRIORITY 1: Purchased access should outlive subscription expiry.
-        $purchase = UserPurchase::where('user_id', $user->id)
-            ->where('purchasable_type', $mediaType === 'MOVIE' ? Movie::class : TVShow::class)
-            ->where('purchasable_id', $mediaId)
-            ->first();
-
-        if ($purchase) {
-            return response()->json([
-                'has_access' => true,
-                'access_type' => 'PURCHASED',
-                'reason' => 'You own this content',
-                'purchased_at' => $purchase->purchased_at->toIso8601String(),
-            ]);
-        }
-
-        // PRIORITY 2: Active rentals should also bypass subscription expiry.
-        $rental = UserRental::where('user_id', $user->id)
-            ->where('rentable_type', $mediaType === 'MOVIE' ? Movie::class : TVShow::class)
-            ->where('rentable_id', $mediaId)
-            ->where('is_active', true)
-            ->where('expires_at', '>', now())
-            ->first();
-
-        if ($rental) {
-            return response()->json([
-                'has_access' => true,
-                'access_type' => 'RENTED',
-                'reason' => 'You have rented this content',
-                'expires_at' => $rental->expires_at->toIso8601String(),
-                'days_remaining' => now()->diffInDays($rental->expires_at, false),
-            ]);
-        }
-
-        // PRIORITY 3: Pending rent/buy payments for this title come before subscription prompts.
-        $pendingTransaction = $this->pendingPaymentResolver->getPendingContentTransaction(
-            $user->id,
-            $mediaType === 'MOVIE' ? Movie::class : TVShow::class,
-            $mediaId,
-        );
-
-        if ($pendingTransaction) {
-            $isManualReview = $pendingTransaction->paymentGateway?->type === 'MANUAL';
-            return response()->json([
-                'has_access' => false,
-                'access_type' => 'PENDING',
-                'reason' => $isManualReview
-                    ? 'Payment is waiting for admin approval.'
-                    : 'We are still confirming your payment.',
-                'pending_payment' => true,
-                'transaction_ref' => $pendingTransaction->transaction_ref,
-                'can_rent' => !empty($media->price_rent),
-                'can_buy' => !empty($media->price_buy),
-                'rent_price' => $media->price_rent,
-                'buy_price' => $media->price_buy,
-            ]);
-        }
-
-        // PRIORITY 4: Premium content can still be unlocked by an active subscription.
-        if ($media->is_premium) {
-            $activeSubscription = UserSubscription::where('user_id', $user->id)
-                ->where('status', 'ACTIVE')
-                ->where('expires_at', '>', now())
-                ->first();
-
-            if ($activeSubscription) {
-                return response()->json([
-                    'has_access' => true,
-                    'access_type' => 'SUBSCRIPTION',
-                    'reason' => 'You have an active subscription',
-                    'subscription_expires_at' => $activeSubscription->expires_at,
-                ]);
-            }
-
-            $pendingSubscription = $this->pendingPaymentResolver->getPendingSubscriptionTransaction($user->id);
-
-            if ($pendingSubscription) {
-                $isManualReview = $pendingSubscription->paymentGateway?->type === 'MANUAL';
-
-                return response()->json([
-                    'has_access' => false,
-                    'access_type' => 'PENDING',
-                    'reason' => $isManualReview
-                        ? 'Your subscription payment is waiting for admin approval.'
-                        : 'We are still confirming your subscription payment.',
-                    'pending_payment' => true,
-                    'transaction_ref' => $pendingSubscription->transaction_ref,
-                    'requires_subscription' => true,
-                ]);
-            }
-
-            return response()->json([
-                'has_access' => false,
-                'access_type' => 'PREMIUM',
-                'reason' => 'This content requires a premium subscription. Subscribe to access premium content.',
-                'requires_subscription' => true,
-                'can_rent' => !empty($media->price_rent),
-                'can_buy' => !empty($media->price_buy),
-                'rent_price' => $media->price_rent,
-                'buy_price' => $media->price_buy,
-            ]);
-        }
-
-        // Content is not free or premium, so rent/buy decides access.
-        return response()->json([
-            'has_access' => false,
-            'access_type' => 'PAID',
-            'reason' => 'Payment required',
-            'can_rent' => !empty($media->price_rent),
-            'can_buy' => !empty($media->price_buy),
-            'rent_price' => $media->price_rent,
-            'buy_price' => $media->price_buy,
-        ]);
+        // This endpoint is a UI decision helper. Historically it returned 200
+        // for valid locked states (LOGIN/SUBSCRIBE/RENT/BUY/PENDING), and the
+        // released mobile apps depend on that contract. Returning 401/403 here
+        // made Axios/React Query classify every ordinary entitlement decision
+        // as a failed request and display "Sign in again". The player/download
+        // endpoints remain authoritative and continue using strict HTTP status
+        // codes when an attempted protected action is denied.
+        return response()->json($result);
     }
 }

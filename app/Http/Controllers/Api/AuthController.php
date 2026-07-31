@@ -15,9 +15,13 @@ use App\Models\WebBridgeToken;
 use App\Services\EmailService;
 use App\Services\IoTeCService;
 use App\Services\SmsService;
+use Firebase\JWT\JWK;
+use Firebase\JWT\JWT;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Laravel\Socialite\Facades\Socialite;
@@ -78,6 +82,7 @@ class AuthController extends Controller
                 'emailVerified' => (bool) $user->email_verified_at,
                 'role' => $user->role ? $user->role->name : 'customer',
                 'is_creator' => $user->isCreator(),
+                'has_creator_workspace' => $user->hasCreatorWorkspace(),
                 'creator_application' => $this->formatCreatorApplication($user),
             ],
             'token' => $token,
@@ -408,9 +413,16 @@ class AuthController extends Controller
             ->with('subscriptionPlan')
             ->latest()
             ->first();
+
+        $hasSubscriptionLedger = \App\Models\UserSubscription::where('user_id', $user->id)->exists()
+            || \App\Models\Subscription::where('user_id', $user->id)->exists();
+        $manualPlanIsActive = ! $hasSubscriptionLedger
+            && strtoupper((string) $user->plan_status) === 'ACTIVE'
+            && strtoupper((string) $user->plan) !== 'FREE'
+            && (! $user->renewal_date || $user->renewal_date->isFuture());
         
         // Update user's plan_status if no active subscription but user table says ACTIVE
-        if (!$activeSubscription && $user->plan_status === 'ACTIVE') {
+        if (!$activeSubscription && !$manualPlanIsActive && $user->plan_status === 'ACTIVE') {
             $user->update([
                 'plan_status' => 'NONE',
                 'plan' => 'FREE',
@@ -439,6 +451,10 @@ class AuthController extends Controller
             $planDisplayName = $activeSubscription->subscriptionPlan->name ?? $user->plan;
             $planStatus = 'ACTIVE';
             $renewalDate = $activeSubscription->expires_at->format('Y-m-d');
+        } elseif ($manualPlanIsActive) {
+            $planDisplayName = $user->plan;
+            $planStatus = 'ACTIVE';
+            $renewalDate = $user->renewal_date?->format('Y-m-d');
         } else {
             // No active subscription - check if user has expired subscriptions
             $expiredSubscription = UserSubscription::where('user_id', $user->id)
@@ -474,6 +490,7 @@ class AuthController extends Controller
                 ] : null,
                 'role' => $user->role ? $user->role->name : 'customer',
                 'is_creator' => $user->isCreator(),
+                'has_creator_workspace' => $user->hasCreatorWorkspace(),
                 'creator_application' => $this->formatCreatorApplication($user),
             ]
         ]);
@@ -485,6 +502,10 @@ class AuthController extends Controller
         if (!$application) {
             return null;
         }
+        $pendingRequestId = $application->informationRequests()
+            ->whereIn('status', ['open', 'needs_changes'])
+            ->latest()
+            ->value('id');
 
         return [
             'id'               => $application->id,
@@ -492,8 +513,13 @@ class AuthController extends Controller
             'display_name'     => $application->display_name,
             'status'           => $application->status,
             'rejection_reason' => $application->rejection_reason,
-            'submitted_at'     => $application->created_at?->toIso8601String(),
+            'submitted_at'     => $application->submitted_at?->toIso8601String(),
+            'resubmitted_at'   => $application->resubmitted_at?->toIso8601String(),
             'reviewed_at'      => $application->reviewed_at?->toIso8601String(),
+            'pending_request_id' => $pendingRequestId,
+            'action_url' => $pendingRequestId
+                ? "/creator/application?request={$pendingRequestId}"
+                : '/creator/application',
         ];
     }
 
@@ -939,16 +965,20 @@ class AuthController extends Controller
     /**
      * Handle Apple login/register (mobile).
      *
-     * NOTE: This implementation assumes the mobile app has already obtained and
-     * validated the Apple identity token. For production-hardening, wire this
-     * to proper server-side Apple token validation.
+     * Accepts either a verified Apple `identity_token` or the legacy
+     * `apple_user_id` value used by earlier mobile builds.
      */
     public function appleMobile(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'apple_user_id' => 'required|string',
+            'identity_token' => 'sometimes|nullable|string',
+            'apple_user_id' => 'required_without:identity_token|nullable|string',
+            'authorization_code' => 'sometimes|nullable|string',
             'email' => 'sometimes|nullable|email|max:255',
             'name' => 'sometimes|nullable|string|max:255',
+            'first_name' => 'sometimes|nullable|string|max:255',
+            'last_name' => 'sometimes|nullable|string|max:255',
+            'full_name' => 'sometimes|nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -958,8 +988,26 @@ class AuthController extends Controller
             ], 422);
         }
 
-        $appleUserId = $request->input('apple_user_id');
-        $email = $request->input('email');
+        $appleClaims = [];
+        if ($request->filled('identity_token')) {
+            try {
+                $appleClaims = $this->verifyAppleIdentityToken($request->input('identity_token'));
+            } catch (\Throwable $e) {
+                $status = str_contains($e->getMessage(), 'not configured') ? 500 : 422;
+
+                return response()->json([
+                    'error' => $status === 500 ? 'Apple sign-in is not configured' : 'Invalid Apple identity token',
+                    'message' => $e->getMessage(),
+                ], $status);
+            }
+        }
+
+        $appleUserId = $appleClaims['sub'] ?? $request->input('apple_user_id');
+        $email = $request->input('email') ?: ($appleClaims['email'] ?? null);
+        $email = is_string($email) && filter_var($email, FILTER_VALIDATE_EMAIL)
+            ? strtolower(trim($email))
+            : null;
+        $name = $this->resolveAppleDisplayName($request, $email, $appleUserId);
 
         // Try to find existing social account first
         $social = SocialAccount::where('provider', 'apple')
@@ -973,6 +1021,20 @@ class AuthController extends Controller
             $user = User::where('email', $email)->first();
         }
 
+        if ($user && $email) {
+            if ($this->isApplePlaceholderEmail($user->email) && ! User::where('email', $email)->whereKeyNot($user->id)->exists()) {
+                $user->email = $email;
+            }
+
+            if (! $user->email_verified_at) {
+                $user->email_verified_at = now();
+            }
+
+            if ($user->isDirty()) {
+                $user->save();
+            }
+        }
+
         if (!$user) {
             $customerRole = Role::where('name', 'customer')->first();
             if (!$customerRole) {
@@ -982,8 +1044,8 @@ class AuthController extends Controller
             }
 
             $user = User::create([
-                'name' => $request->input('name') ?: 'Apple User',
-                'email' => $email,
+                'name' => $name,
+                'email' => $email ?: $this->fallbackAppleEmail($appleUserId),
                 'password' => Hash::make(uniqid('apple_', true)),
                 'role_id' => $customerRole->id,
                 'plan' => 'FREE',
@@ -993,7 +1055,7 @@ class AuthController extends Controller
 
             $isNewUser = true;
 
-            if ($user->email) {
+            if ($email) {
                 EmailService::sendWelcome($user->email, $user->name);
             }
         }
@@ -1006,7 +1068,8 @@ class AuthController extends Controller
             ],
             [
                 'user_id' => $user->id,
-                'email' => $email,
+                'email' => $email ?: $social?->email,
+                'raw_profile' => $appleClaims ?: $social?->raw_profile,
                 'last_login_at' => now(),
             ]
         );
@@ -1017,6 +1080,78 @@ class AuthController extends Controller
             'message' => 'Login successful via Apple',
             'data' => $this->buildAuthPayload($user, $token, 'apple', $isNewUser, false),
         ]);
+    }
+
+    protected function verifyAppleIdentityToken(string $identityToken): array
+    {
+        $keys = Cache::remember('apple_sign_in_jwks', now()->addHours(12), function () {
+            $response = Http::acceptJson()
+                ->timeout(5)
+                ->get('https://appleid.apple.com/auth/keys');
+
+            if (! $response->successful()) {
+                throw new \RuntimeException('Could not fetch Apple public keys.');
+            }
+
+            return $response->json();
+        });
+
+        try {
+            $decoded = JWT::decode($identityToken, JWK::parseKeySet($keys));
+        } catch (\Throwable $e) {
+            Cache::forget('apple_sign_in_jwks');
+            throw new \RuntimeException('Apple token signature could not be verified.');
+        }
+
+        $claims = json_decode(json_encode($decoded), true) ?: [];
+
+        if (($claims['iss'] ?? null) !== 'https://appleid.apple.com') {
+            throw new \RuntimeException('Apple token issuer is invalid.');
+        }
+
+        if (empty($claims['sub'])) {
+            throw new \RuntimeException('Apple token subject is missing.');
+        }
+
+        $configuredAudiences = array_values(array_filter((array) config('services.apple.client_ids', [])));
+        if (empty($configuredAudiences)) {
+            throw new \RuntimeException('Apple client id is not configured.');
+        }
+
+        $tokenAudiences = (array) ($claims['aud'] ?? []);
+        if (empty(array_intersect($configuredAudiences, $tokenAudiences))) {
+            throw new \RuntimeException('Apple token audience is invalid.');
+        }
+
+        return $claims;
+    }
+
+    protected function resolveAppleDisplayName(Request $request, ?string $email, string $appleUserId): string
+    {
+        $name = trim((string) $request->input('name', ''));
+        if ($name !== '') {
+            return $name;
+        }
+
+        $firstName = trim((string) ($request->input('first_name') ?: $request->input('full_name.givenName') ?: $request->input('full_name.given_name')));
+        $lastName = trim((string) ($request->input('last_name') ?: $request->input('full_name.familyName') ?: $request->input('full_name.family_name')));
+        $name = trim($firstName.' '.$lastName);
+
+        if ($name !== '') {
+            return $name;
+        }
+
+        return $email ? Str::before($email, '@') : 'Apple User '.substr(hash('sha256', $appleUserId), 0, 8);
+    }
+
+    protected function fallbackAppleEmail(string $appleUserId): string
+    {
+        return 'apple_'.substr(hash('sha256', $appleUserId), 0, 40).'@apple-auth.local';
+    }
+
+    protected function isApplePlaceholderEmail(?string $email): bool
+    {
+        return is_string($email) && str_ends_with($email, '@apple-auth.local');
     }
 
     /**

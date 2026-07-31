@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\MediaLibrary;
 use App\Models\User;
 use App\Models\VJ;
+use App\Services\CreatorAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 
@@ -32,7 +33,7 @@ abstract class CreatorBaseController extends Controller
      */
     protected function resolveVjProfile(User $user): ?VJ
     {
-        return $user->isVJ() ? $user->vjProfile : null;
+        return $user->vjProfile;
     }
 
     /**
@@ -40,7 +41,17 @@ abstract class CreatorBaseController extends Controller
      */
     protected function resolveMediaLibraryProfile(User $user): ?MediaLibrary
     {
-        return $user->isMediaLibrary() ? $user->mediaLibraryProfile : null;
+        return $user->mediaLibraryProfile;
+    }
+
+    protected function creatorAccessAllowed(User $user): bool
+    {
+        return app(CreatorAccessService::class)->workspace($user);
+    }
+
+    protected function creatorCanSubmit(User $user): bool
+    {
+        return app(CreatorAccessService::class)->canSubmitDrafts($user);
     }
 
     /**
@@ -54,23 +65,18 @@ abstract class CreatorBaseController extends Controller
             return $query;
         }
 
-        if ($user->isVJ()) {
-            $vj = $this->resolveVjProfile($user);
-            if (!$vj) {
-                return $query->whereRaw('1 = 0');
-            }
-            return $query->where('vj_id', $vj->id);
-        }
+        $vjId = $this->resolveVjProfile($user)?->id;
+        $libraryId = $this->resolveMediaLibraryProfile($user)?->id;
 
-        if ($user->isMediaLibrary()) {
-            $library = $this->resolveMediaLibraryProfile($user);
-            if (!$library) {
-                return $query->whereRaw('1 = 0');
+        return $query->where(function ($owner) use ($user, $vjId, $libraryId) {
+            $owner->where('submitted_by', $user->id);
+            if ($vjId) {
+                $owner->orWhere('vj_id', $vjId);
             }
-            return $query->where('media_library_id', $library->id);
-        }
-
-        return $query->whereRaw('1 = 0');
+            if ($libraryId) {
+                $owner->orWhere('media_library_id', $libraryId);
+            }
+        });
     }
 
     /**
@@ -84,30 +90,25 @@ abstract class CreatorBaseController extends Controller
             return $query;
         }
 
-        if ($user->isVJ()) {
-            $vj = $this->resolveVjProfile($user);
-            if (!$vj) {
-                return $query->whereRaw('1 = 0');
-            }
-            return $query->where('vj_id', $vj->id);
-        }
+        $vjId = $this->resolveVjProfile($user)?->id;
+        $libraryId = $this->resolveMediaLibraryProfile($user)?->id;
 
-        if ($user->isMediaLibrary()) {
-            $library = $this->resolveMediaLibraryProfile($user);
-            if (!$library) {
-                return $query->whereRaw('1 = 0');
+        return $query->where(function ($owner) use ($user, $vjId, $libraryId) {
+            $owner->where('submitted_by', $user->id);
+            if ($vjId) {
+                $owner->orWhere('vj_id', $vjId);
             }
-            return $query->where('media_library_id', $library->id);
-        }
-
-        return $query->whereRaw('1 = 0');
+            if ($libraryId) {
+                $owner->orWhere('media_library_id', $libraryId);
+            }
+        });
     }
 
     protected function notCreator(): JsonResponse
     {
         return response()->json([
             'success' => false,
-            'message' => 'Your account is not a verified creator account. Please complete your creator application first.',
+            'message' => 'Start or resume your creator application to access this workspace.',
         ], 403);
     }
 
@@ -118,6 +119,11 @@ abstract class CreatorBaseController extends Controller
             'title' => $movie->title,
             'slug' => $movie->slug,
             'description' => $movie->description,
+            'short_description' => $movie->short_description,
+            'original_title' => $movie->original_title,
+            'tagline' => $movie->tagline,
+            'director' => $movie->director,
+            'trailer_url' => $movie->trailer_url,
             'thumbnail' => $this->resolveMediaUrl($movie->thumbnail),
             'backdrop' => $this->resolveMediaUrl($movie->backdrop),
             'rating' => $movie->rating,
@@ -127,19 +133,68 @@ abstract class CreatorBaseController extends Controller
             'country' => $movie->country,
             'language' => $movie->language,
             'original_language' => $movie->original_language,
+            'translation_language' => $movie->translation_language,
+            'category_id' => $movie->category_id,
             'is_free' => (bool) $movie->is_free,
             'is_premium' => (bool) $movie->is_premium,
             'price_rent' => $movie->price_rent,
             'price_buy' => $movie->price_buy,
+            'download_enabled' => (bool) $movie->download_enabled,
             'is_active' => (bool) $movie->is_active,
             'publish_status' => $movie->publish_status ?? 'draft',
+            'processing_status' => $movie->processing_status ?? 'not_started',
+            'editorial_status' => $movie->editorial_status ?? 'not_submitted',
+            'publication_status' => $movie->publication_status ?? 'draft',
+            'monetization_status' => $movie->monetization_status ?? 'disabled',
+            'submission_origin' => $movie->submission_origin ?? 'administrator',
+            'submitted_by' => $movie->submitted_by,
             'cdn_asset_id' => $movie->cdn_asset_id,
             'vj_id' => $movie->vj_id,
             'media_library_id' => $movie->media_library_id,
             'tmdb_id' => $movie->tmdb_id,
-            'tagline' => $movie->tagline,
+            'imdb_id' => $movie->imdb_id,
+            'homepage' => $movie->homepage,
+            'production_companies' => $movie->production_companies ?? [],
+            'production_countries' => $movie->production_countries ?? [],
+            'tags' => $movie->tags ?? [],
+            'seo_title' => $movie->seo_title,
+            'seo_description' => $movie->seo_description,
+            'scheduled_for' => $movie->scheduled_for?->toIso8601String(),
+            'ownership_declaration_accepted' => (bool) $movie->ownership_declaration_accepted_at,
             'genres' => $movie->relationLoaded('genres')
                 ? $movie->genres->map(fn($g) => ['id' => $g->id, 'name' => $g->name])
+                : [],
+            'actors' => $movie->relationLoaded('actors')
+                ? $movie->actors->map(fn ($actor) => [
+                    'id' => $actor->id,
+                    'name' => $actor->name,
+                    'image' => $this->resolveMediaUrl($actor->image),
+                    'role' => $actor->pivot?->role,
+                    'order' => $actor->pivot?->order,
+                ])
+                : [],
+            'monetization' => $movie->relationLoaded('monetizationSetting') && $movie->monetizationSetting
+                ? $this->formatMonetization($movie->monetizationSetting)
+                : null,
+            'subtitles' => $movie->relationLoaded('subtitles')
+                ? $movie->subtitles->map(fn ($subtitle) => [
+                    'id' => $subtitle->id,
+                    'language' => $subtitle->language,
+                    'label' => $subtitle->label,
+                    'format' => $subtitle->format,
+                    'is_default' => (bool) $subtitle->is_default,
+                    'is_active' => (bool) $subtitle->is_active,
+                    'url' => $subtitle->full_url,
+                ])
+                : [],
+            'review_history' => $movie->relationLoaded('creatorReviews')
+                ? $movie->creatorReviews->map(fn ($review) => [
+                    'id' => $review->id,
+                    'status' => $review->status,
+                    'creator_message' => $review->creator_message,
+                    'requested_changes' => $review->requested_changes ?? [],
+                    'reviewed_at' => $review->reviewed_at?->toIso8601String(),
+                ])
                 : [],
             'views_count' => (int) ($movie->views_count ?? 0),
             'sources_count' => $withSources ? $movie->videoSources()->count() : null,
@@ -161,6 +216,11 @@ abstract class CreatorBaseController extends Controller
             'title' => $show->title,
             'slug' => $show->slug,
             'description' => $show->description,
+            'short_description' => $show->short_description,
+            'original_title' => $show->original_title,
+            'tagline' => $show->tagline,
+            'director' => $show->director,
+            'trailer_url' => $show->trailer_url,
             'thumbnail' => $this->resolveMediaUrl($show->thumbnail),
             'backdrop' => $this->resolveMediaUrl($show->backdrop),
             'rating' => $show->rating,
@@ -168,20 +228,73 @@ abstract class CreatorBaseController extends Controller
             'certificate' => $show->certificate,
             'country' => $show->country,
             'language' => $show->language,
+            'original_language' => $show->original_language,
+            'translation_language' => $show->translation_language,
+            'category_id' => $show->category_id,
             'is_free' => (bool) $show->is_free,
             'is_premium' => (bool) $show->is_premium,
             'price_rent' => $show->price_rent,
             'price_buy' => $show->price_buy,
+            'download_enabled' => (bool) $show->download_enabled,
             'is_active' => (bool) $show->is_active,
             'publish_status' => $show->publish_status ?? 'draft',
+            'processing_status' => $show->processing_status ?? 'not_started',
+            'editorial_status' => $show->editorial_status ?? 'not_submitted',
+            'publication_status' => $show->publication_status ?? 'draft',
+            'monetization_status' => $show->monetization_status ?? 'disabled',
+            'submission_origin' => $show->submission_origin ?? 'administrator',
+            'submitted_by' => $show->submitted_by,
             'cdn_asset_id' => $show->cdn_asset_id,
             'vj_id' => $show->vj_id,
             'media_library_id' => $show->media_library_id,
             'tmdb_id' => $show->tmdb_id,
+            'imdb_id' => $show->imdb_id,
+            'homepage' => $show->homepage,
+            'status' => $show->status,
+            'networks' => $show->networks ?? [],
+            'production_companies' => $show->production_companies ?? [],
+            'production_countries' => $show->production_countries ?? [],
+            'tags' => $show->tags ?? [],
+            'seo_title' => $show->seo_title,
+            'seo_description' => $show->seo_description,
+            'scheduled_for' => $show->scheduled_for?->toIso8601String(),
+            'ownership_declaration_accepted' => (bool) $show->ownership_declaration_accepted_at,
             'number_of_seasons' => $show->number_of_seasons,
             'number_of_episodes' => $show->number_of_episodes,
             'genres' => $show->relationLoaded('genres')
                 ? $show->genres->map(fn($g) => ['id' => $g->id, 'name' => $g->name])
+                : [],
+            'actors' => $show->relationLoaded('actors')
+                ? $show->actors->map(fn ($actor) => [
+                    'id' => $actor->id,
+                    'name' => $actor->name,
+                    'image' => $this->resolveMediaUrl($actor->image),
+                    'role' => $actor->pivot?->role,
+                    'order' => $actor->pivot?->order,
+                ])
+                : [],
+            'monetization' => $show->relationLoaded('monetizationSetting') && $show->monetizationSetting
+                ? $this->formatMonetization($show->monetizationSetting)
+                : null,
+            'subtitles' => $show->relationLoaded('subtitles')
+                ? $show->subtitles->map(fn ($subtitle) => [
+                    'id' => $subtitle->id,
+                    'language' => $subtitle->language,
+                    'label' => $subtitle->label,
+                    'format' => $subtitle->format,
+                    'is_default' => (bool) $subtitle->is_default,
+                    'is_active' => (bool) $subtitle->is_active,
+                    'url' => $subtitle->full_url,
+                ])
+                : [],
+            'review_history' => $show->relationLoaded('creatorReviews')
+                ? $show->creatorReviews->map(fn ($review) => [
+                    'id' => $review->id,
+                    'status' => $review->status,
+                    'creator_message' => $review->creator_message,
+                    'requested_changes' => $review->requested_changes ?? [],
+                    'reviewed_at' => $review->reviewed_at?->toIso8601String(),
+                ])
                 : [],
             'views_count' => (int) ($show->views_count ?? 0),
             'created_at' => $show->created_at?->toIso8601String(),
@@ -213,7 +326,33 @@ abstract class CreatorBaseController extends Controller
             'public_url' => $metadata['public_url'] ?? null,
             'last_message' => $metadata['last_message'] ?? null,
             'source_role' => $metadata['source_role'] ?? null,
+            'processing_stage' => $metadata['processing_stage'] ?? $metadata['cdn_status'] ?? $metadata['fetch_status'] ?? null,
+            'progress_percent' => $metadata['progress_percent'] ?? $metadata['progress'] ?? $metadata['telebot_progress'] ?? null,
+            'output_format' => $metadata['output_format'] ?? $source->format,
+            'final_file_size' => $metadata['final_file_size'] ?? $source->file_size,
+            'storage_saved_bytes' => $metadata['storage_saved_bytes'] ?? null,
+            'warnings' => $metadata['warnings'] ?? [],
+            'failure_reason' => $source->failure_reason ?? $metadata['failure_reason'] ?? $metadata['last_error'] ?? null,
+            'error_code' => $metadata['error_code'] ?? $metadata['nbx_sync_error_code'] ?? null,
+            'support_reference' => $metadata['support_reference'] ?? $metadata['nbx_sync_support_reference'] ?? null,
+            'retryable' => (bool) ($metadata['retryable'] ?? false),
+            'action_required' => (bool) ($metadata['action_required'] ?? false),
             'created_at' => $source->created_at?->toIso8601String(),
+        ];
+    }
+
+    protected function formatMonetization(\App\Models\CreatorMonetizationSetting $setting): array
+    {
+        return [
+            'subscription_enabled' => (bool) $setting->subscription_enabled,
+            'subscription_plan_ids' => $setting->subscription_plan_ids ?? [],
+            'rent_enabled' => (bool) $setting->rent_enabled,
+            'rent_price_minor' => $setting->rent_price_minor,
+            'rental_duration_hours' => $setting->rental_duration_hours,
+            'purchase_enabled' => (bool) $setting->purchase_enabled,
+            'purchase_price_minor' => $setting->purchase_price_minor,
+            'currency' => $setting->currency,
+            'status' => $setting->status,
         ];
     }
 }

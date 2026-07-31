@@ -21,9 +21,13 @@ use App\Listeners\SendWelcomeCommunication;
 use App\Models\CreatorApplication;
 use App\Models\Movie;
 use App\Models\TVShow;
+use App\Models\Episode;
+use App\Models\CreatorVerificationEvidence;
 use App\Observers\CreatorApplicationObserver;
 use App\Policies\MoviePolicy;
 use App\Policies\TVShowPolicy;
+use App\Policies\EpisodePolicy;
+use App\Policies\CreatorVerificationEvidencePolicy;
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
 use Illuminate\Support\Facades\Event;
 
@@ -32,6 +36,8 @@ class AppServiceProvider extends ServiceProvider
     protected $policies = [
         Movie::class => MoviePolicy::class,
         TVShow::class => TVShowPolicy::class,
+        Episode::class => EpisodePolicy::class,
+        CreatorVerificationEvidence::class => CreatorVerificationEvidencePolicy::class,
     ];
 
     public function register(): void

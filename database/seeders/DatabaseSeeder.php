@@ -29,6 +29,7 @@ class DatabaseSeeder extends Seeder
             SubscriptionPlanSeeder::class,
             SmtpSettingSeeder::class,
             EmailTemplateSeeder::class,
+            CreatorPlatformSeeder::class,
             AdminAlertSettingSeeder::class,
             HeroSlideSeeder::class,
             CmsPageSeeder::class,

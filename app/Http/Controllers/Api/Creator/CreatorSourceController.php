@@ -3,19 +3,25 @@
 namespace App\Http\Controllers\Api\Creator;
 
 use App\Jobs\FetchVideoFromUrlJob;
-use App\Jobs\TelegramToContaboImportJob;
 use App\Models\Episode;
 use App\Models\Movie;
 use App\Models\VideoSource;
+use App\Models\CreatorContentSubmission;
+use App\Models\CreatorUploadSession;
 use App\Services\CdnMediaClientService;
+use App\Services\CreatorContentWorkflowService;
+use App\Services\NbxVideoSourceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CreatorSourceController extends CreatorBaseController
 {
-    public function __construct(private readonly CdnMediaClientService $cdn)
-    {
+    public function __construct(
+        private readonly CdnMediaClientService $cdn,
+        private readonly NbxVideoSourceService $nbx,
+        private readonly CreatorContentWorkflowService $workflow
+    ) {
     }
 
     /**
@@ -26,7 +32,7 @@ class CreatorSourceController extends CreatorBaseController
         $user = $request->user();
         $movie = $this->creatorMovieQuery($user)->find($movieId);
 
-        if (!$movie) {
+        if (! $movie) {
             return response()->json(['success' => false, 'message' => 'Movie not found or not authorized.'], 404);
         }
 
@@ -38,7 +44,7 @@ class CreatorSourceController extends CreatorBaseController
 
         return response()->json([
             'success' => true,
-            'data' => $sources->map(fn($s) => $this->formatVideoSource($s)),
+            'data' => $sources->map(fn ($s) => $this->formatVideoSource($s)),
         ]);
     }
 
@@ -55,18 +61,25 @@ class CreatorSourceController extends CreatorBaseController
         $user = $request->user();
         $movie = $this->creatorMovieQuery($user)->find($movieId);
 
-        if (!$movie) {
+        if (! $movie) {
             return response()->json(['success' => false, 'message' => 'Movie not found or not authorized.'], 404);
         }
 
         $validated = $request->validate([
-            'type'     => ['required', 'in:local,url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage'],
-            'url'      => ['required_if:type,url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage', 'nullable', 'string', 'max:2048'],
-            'quality'  => ['nullable', 'string', 'max:20'],
+            'type' => ['required', 'in:local,url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage'],
+            'url' => ['required_if:type,url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage', 'nullable', 'string', 'max:2048'],
+            'quality' => ['nullable', 'string', 'max:20'],
             'filename' => ['required_if:type,local', 'nullable', 'string', 'max:255'],
-            'mime'     => ['nullable', 'string', 'max:100'],
-            'size'     => ['nullable', 'integer'],
+            'mime' => ['nullable', 'string', 'max:100'],
+            'size' => ['nullable', 'integer'],
             'is_primary' => ['boolean'],
+            'compress_enabled' => ['nullable', 'boolean'],
+            'hls_480p' => ['nullable', 'boolean'],
+            'hls_720p' => ['nullable', 'boolean'],
+            'hls_1080p' => ['nullable', 'boolean'],
+            'retention_policy' => ['nullable', 'in:optimized_only,retain_original'],
+            'max_resolution' => ['nullable', 'integer', 'in:480,720,1080'],
+            'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
         ]);
 
         $type = $validated['type'];
@@ -115,7 +128,7 @@ class CreatorSourceController extends CreatorBaseController
 
         return response()->json([
             'success' => true,
-            'data' => $sources->map(fn($s) => $this->formatVideoSource($s)),
+            'data' => $sources->map(fn ($s) => $this->formatVideoSource($s)),
         ]);
     }
 
@@ -134,10 +147,20 @@ class CreatorSourceController extends CreatorBaseController
         }
 
         $validated = $request->validate([
-            'type'     => ['required', 'in:url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage'],
-            'url'      => ['required', 'string', 'max:2048'],
-            'quality'  => ['nullable', 'string', 'max:20'],
+            'type' => ['required', 'in:local,url,youtube,vimeo,fetched,telegram,tele_ob,contabo_object_storage'],
+            'url' => ['required_unless:type,local', 'nullable', 'string', 'max:2048'],
+            'quality' => ['nullable', 'string', 'max:20'],
+            'filename' => ['required_if:type,local', 'nullable', 'string', 'max:255'],
+            'mime' => ['nullable', 'string', 'max:150'],
+            'size' => ['required_if:type,local', 'nullable', 'integer', 'min:1'],
             'is_primary' => ['boolean'],
+            'compress_enabled' => ['nullable', 'boolean'],
+            'hls_480p' => ['nullable', 'boolean'],
+            'hls_720p' => ['nullable', 'boolean'],
+            'hls_1080p' => ['nullable', 'boolean'],
+            'retention_policy' => ['nullable', 'in:optimized_only,retain_original'],
+            'max_resolution' => ['nullable', 'integer', 'in:480,720,1080'],
+            'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
         ]);
 
         $type = $validated['type'];
@@ -145,6 +168,9 @@ class CreatorSourceController extends CreatorBaseController
         $creatorMeta = $this->buildCreatorEpisodeMeta($request->user(), $episode);
 
         switch ($type) {
+            case 'local':
+                return $this->handleDirectUpload($episode, $validated, $quality, $creatorMeta, 'episode');
+
             case 'url':
             case 'fetched':
             case 'contabo_object_storage':
@@ -171,76 +197,119 @@ class CreatorSourceController extends CreatorBaseController
         $user = $request->user();
         $movie = $this->creatorMovieQuery($user)->find($movieId);
 
-        if (!$movie) {
+        if (! $movie) {
             return response()->json(['success' => false, 'message' => 'Movie not found or not authorized.'], 404);
         }
 
         $validated = $request->validate([
             'filename' => ['required', 'string', 'max:255'],
-            'mime'     => ['nullable', 'string', 'max:100'],
-            'size'     => ['nullable', 'integer'],
-            'quality'  => ['nullable', 'string', 'max:20'],
+            'mime' => ['nullable', 'string', 'max:100'],
+            'size' => ['nullable', 'integer'],
+            'quality' => ['nullable', 'string', 'max:20'],
+            'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
         ]);
 
-        $filename = $validated['filename'];
-        $mime     = $validated['mime'] ?? null;
-        $size     = $validated['size'] ?? null;
-        $quality  = $validated['quality'] ?? 'auto';
+        return $this->handleDirectUpload(
+            $movie,
+            $validated,
+            $validated['quality'] ?? 'auto',
+            $this->buildCreatorMeta($user, $movie),
+            'movie'
+        );
+    }
 
-        if ($tooLarge = $this->rejectOversizedCreatorUpload($size)) {
-            return $tooLarge;
+    public function episodeUploadToken(Request $request, int $episodeId): JsonResponse
+    {
+        $episode = $this->creatorEpisode($request, $episodeId);
+        if (! $episode) {
+            return response()->json(['success' => false, 'message' => 'Episode not found or not authorized.'], 404);
         }
+        $validated = $request->validate([
+            'filename' => ['required', 'string', 'max:255'],
+            'mime' => ['nullable', 'string', 'max:150'],
+            'size' => ['required', 'integer', 'min:1'],
+            'quality' => ['nullable', 'string', 'max:20'],
+            'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
+        ]);
 
-        // Ensure CDN asset exists for this movie
-        $assetId = $movie->cdn_asset_id;
-        if (!$assetId) {
-            $assetResult = $this->cdn->importFromUrl('', $movie->title, 'movie');
-            if (!empty($assetResult['data']['id'])) {
-                $assetId = $assetResult['data']['id'];
-                $movie->update(['cdn_asset_id' => $assetId]);
+        return $this->handleDirectUpload(
+            $episode,
+            $validated,
+            $validated['quality'] ?? 'auto',
+            $this->buildCreatorEpisodeMeta($request->user(), $episode),
+            'episode'
+        );
+    }
+
+    public function submissionStatus(Request $request, string $submissionId): JsonResponse
+    {
+        $submission = CreatorContentSubmission::where('user_id', $request->user()->id)
+            ->whereKey($submissionId)
+            ->first();
+        if (! $submission && ! $request->user()->isAdmin()) {
+            return response()->json(['success' => false, 'message' => 'Submission not found.'], 404);
+        }
+        $submission ??= CreatorContentSubmission::findOrFail($submissionId);
+
+        if ($submission->video_source_id) {
+            $source = VideoSource::find($submission->video_source_id);
+            if ($source && $submission->processing_status !== 'ready') {
+                try {
+                    $this->nbx->sync($source);
+                } catch (\Throwable) {
+                    // The persisted status remains the reliable response when NBX is transiently unavailable.
+                }
+                $submission->refresh();
             }
         }
 
-        // Create VideoSource record as placeholder
-        $source = VideoSource::create([
-            'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => 'local',
-            'quality'         => $quality,
-            'is_primary'      => !VideoSource::where('sourceable_type', Movie::class)
-                ->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => [
-                'cdn_asset_id'  => $assetId,
-                'cdn_status'    => 'pending_upload',
-                'filename'      => $filename,
-            ],
-        ]);
+        return response()->json(['success' => true, 'data' => $this->formatSubmission($submission)]);
+    }
 
-        // Generate HMAC signature
-        $secret = (string) config('services.cdn.ingest_secret', '');
-        $timestamp = time();
-        $nonce = Str::uuid()->toString();
-        $canonical = implode('|', [$timestamp, $nonce, $source->id, $assetId, $filename, (string) ($size ?? ''), (string) ($mime ?? '')]);
-        $signature = hash_hmac('sha256', $canonical, $secret);
-
-        $cdnBase = rtrim((string) config('services.cdn.base_url', ''), '/');
-        $ingestPath = (string) config('services.cdn.ingest_endpoint', '/api/ingest/asset-source-upload');
+    public function retry(Request $request, string $submissionId): JsonResponse
+    {
+        $submission = CreatorContentSubmission::where('user_id', $request->user()->id)
+            ->whereKey($submissionId)
+            ->firstOrFail();
+        if ($submission->processing_status !== 'processing_failed' || ! $submission->video_source_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only failed NBX jobs with a stored source can be retried.',
+            ], 422);
+        }
+        $source = VideoSource::findOrFail($submission->video_source_id);
+        if (! $this->creatorOwnsSource($request->user(), $source)) {
+            abort(403);
+        }
+        $failure = (array) ($submission->result_metadata ?? []);
+        if (array_key_exists('retryable', $failure) && ! (bool) $failure['retryable']) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This file needs a new upload or support review; retrying the same input would fail again.',
+            ], 422);
+        }
+        $operation = match ((string) ($failure['error_code'] ?? '')) {
+            'STORAGE_UPLOAD_FAILED' => 'retry_storage',
+            'PORTAL_SYNC_FAILED' => 'retry_portal_sync',
+            default => 'retry',
+        };
+        try {
+            $source = $this->nbx->runExplicitAction($source, $operation);
+            $submission->increment('retry_count');
+            $submission->update([
+                'processing_status' => 'processing',
+                'failure_reason' => null,
+                'last_retried_at' => now(),
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'source_id'      => $source->id,
-                'asset_id'       => $assetId,
-                'cdn_ingest_url' => $cdnBase . $ingestPath,
-                'signature'      => $signature,
-                'timestamp'      => $timestamp,
-                'nonce'          => $nonce,
-                'filename'       => $filename,
-                'mime_type'      => $mime,
-                'size_bytes'     => $size,
-            ],
-        ]);
+            'message' => 'NBX retry accepted.',
+            'data' => $this->formatSubmission($submission->fresh()),
+        ], 202);
     }
 
     /**
@@ -251,7 +320,7 @@ class CreatorSourceController extends CreatorBaseController
         $user = $request->user();
         $source = VideoSource::find($sourceId);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json(['success' => false, 'message' => 'Source not found.'], 404);
         }
 
@@ -265,13 +334,13 @@ class CreatorSourceController extends CreatorBaseController
         // Poll CDN if we have a CDN source ID
         if ($cdnSourceId) {
             $cdnResult = $this->cdn->getSource((int) $cdnSourceId);
-            if ($cdnResult['ok'] && !empty($cdnResult['data'])) {
+            if ($cdnResult['ok'] && ! empty($cdnResult['data'])) {
                 $cdnData = $cdnResult['data'];
                 $newMeta = array_merge($metadata, [
-                    'cdn_status'    => $cdnData['status'] ?? $metadata['cdn_status'],
-                    'hls_master_url'=> $cdnData['hls_master_url'] ?? null,
-                    'mp4_play_url'  => $cdnData['mp4_url'] ?? null,
-                    'progress'      => $cdnData['progress_percent'] ?? null,
+                    'cdn_status' => $cdnData['status'] ?? $metadata['cdn_status'],
+                    'hls_master_url' => $cdnData['hls_master_url'] ?? null,
+                    'mp4_play_url' => $cdnData['mp4_url'] ?? null,
+                    'progress' => $cdnData['progress_percent'] ?? null,
                 ]);
                 $source->update(['metadata' => $newMeta]);
                 $metadata = $newMeta;
@@ -300,7 +369,7 @@ class CreatorSourceController extends CreatorBaseController
         $user = $request->user();
         $source = VideoSource::find($sourceId);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json(['success' => false, 'message' => 'Source not found.'], 404);
         }
 
@@ -317,68 +386,7 @@ class CreatorSourceController extends CreatorBaseController
 
     private function handleLocalUpload(Movie $movie, array $validated, string $quality, array $creatorMeta): JsonResponse
     {
-        $filename = $validated['filename'];
-        $mime = $validated['mime'] ?? null;
-        $size = $validated['size'] ?? null;
-
-        if ($tooLarge = $this->rejectOversizedCreatorUpload($size)) {
-            return $tooLarge;
-        }
-
-        // Ensure CDN asset exists
-        $assetId = $movie->cdn_asset_id;
-        if (!$assetId) {
-            $assetResult = $this->cdn->importFromUrl('', $movie->title, 'movie');
-            if (!empty($assetResult['data']['id'])) {
-                $assetId = $assetResult['data']['id'];
-                $movie->update(['cdn_asset_id' => $assetId]);
-            }
-        }
-
-        $source = VideoSource::create([
-            'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => 'local',
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'cdn_asset_id'  => $assetId,
-                'cdn_status'    => 'pending_upload',
-                'filename'      => $filename,
-            ], $creatorMeta),
-        ]);
-
-        // Generate HMAC upload token
-        $secret = (string) config('services.cdn.ingest_secret', '');
-        $timestamp = time();
-        $nonce = Str::uuid()->toString();
-        $canonical = implode('|', [$timestamp, $nonce, $source->id, $assetId, $filename, (string) ($size ?? ''), (string) ($mime ?? '')]);
-        $signature = hash_hmac('sha256', $canonical, $secret);
-
-        $cdnBase = rtrim((string) config('services.cdn.base_url', ''), '/');
-        $ingestPath = (string) config('services.cdn.ingest_endpoint', '/api/ingest/asset-source-upload');
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Upload token generated. Upload the file directly to CDN.',
-            'data' => array_merge(
-                $this->formatVideoSource($source),
-                [
-                    'upload_token' => [
-                        'cdn_ingest_url' => $cdnBase . $ingestPath,
-                        'asset_id'       => $assetId,
-                        'source_id'      => $source->id,
-                        'signature'      => $signature,
-                        'timestamp'      => $timestamp,
-                        'nonce'          => $nonce,
-                        'filename'       => $filename,
-                        'mime_type'      => $mime,
-                        'size_bytes'     => $size,
-                    ],
-                ]
-            ),
-        ], 201);
+        return $this->handleDirectUpload($movie, $validated, $quality, $creatorMeta, 'movie');
     }
 
     private function handleRemoteFetchToContabo(Movie $movie, array $validated, string $quality, array $creatorMeta): JsonResponse
@@ -388,39 +396,27 @@ class CreatorSourceController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Video URL is required.'], 422);
         }
 
-        $source = VideoSource::create([
-            'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => 'contabo_object_storage',
-            'url'             => $url,
-            'quality'         => $quality,
-            'format'          => 'mp4',
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'provider'       => 'contabo_object_storage',
-                'storage_target' => 'contabo_object_storage',
-                'fetch_status'   => 'queued',
-                'fetch_mode'     => 'creator_queue',
-                'source_url'     => $url,
-                'last_message'   => 'Remote URL import queued for Contabo Object Storage.',
-                'queued_at'      => now()->toDateTimeString(),
-            ], $creatorMeta),
-        ]);
-
-        FetchVideoFromUrlJob::dispatch(
-            $source->id,
-            $url,
-            Movie::class,
-            (int) $movie->id,
-            $quality,
-            'auto',
-            'contabo_object_storage'
-        )->onQueue('contabo-imports');
+        try {
+            $source = $this->nbx->submitRemote($movie, $this->creatorNbxPayload(
+                $validated,
+                $url,
+                $quality,
+                $creatorMeta,
+                ! VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
+            ), 'movie');
+            $submission = $this->workflow->submission($movie, request()->user(), 'remote_url');
+            $this->workflow->markProcessing($movie, $submission, 'queued', [
+                'video_source_id' => $source->id,
+                'processing_job_id' => $source->processing_job_id,
+                'status_message' => 'NBX accepted the remote URL.',
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Remote video import queued for Object Storage. Status will update here.',
+            'message' => 'Remote video import queued through NBX. Status will update here.',
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
@@ -436,24 +432,24 @@ class CreatorSourceController extends CreatorBaseController
         $cdnAssetId = $importResult['data']['id'] ?? null;
         $cdnSourceId = $importResult['data']['source_id'] ?? null;
 
-        if ($cdnAssetId && !$assetId) {
+        if ($cdnAssetId && ! $assetId) {
             $movie->update(['cdn_asset_id' => $cdnAssetId]);
             $assetId = $cdnAssetId;
         }
 
         $source = VideoSource::create([
             'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => $type,
-            'url'             => $url,
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'cdn_asset_id'  => $assetId,
+            'sourceable_id' => $movie->id,
+            'type' => $type,
+            'url' => $url,
+            'quality' => $quality,
+            'is_primary' => $validated['is_primary'] ?? ! VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
+            'is_active' => false,
+            'metadata' => array_merge([
+                'cdn_asset_id' => $assetId,
                 'cdn_source_id' => $cdnSourceId,
-                'cdn_status'    => $importResult['ok'] ? 'importing' : 'failed',
-                'fetch_status'  => $importResult['ok'] ? 'downloading' : 'failed',
+                'cdn_status' => $importResult['ok'] ? 'importing' : 'failed',
+                'fetch_status' => $importResult['ok'] ? 'downloading' : 'failed',
             ], $creatorMeta),
         ]);
 
@@ -461,7 +457,7 @@ class CreatorSourceController extends CreatorBaseController
             'success' => true,
             'message' => $importResult['ok']
                 ? 'Remote fetch started. Poll status to track progress.'
-                : 'CDN import failed: ' . ($importResult['error'] ?? 'unknown error'),
+                : 'CDN import failed: '.($importResult['error'] ?? 'unknown error'),
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
@@ -470,60 +466,49 @@ class CreatorSourceController extends CreatorBaseController
     {
         $source = VideoSource::create([
             'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => $type,
-            'url'             => $validated['url'],
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => true,
+            'sourceable_id' => $movie->id,
+            'type' => $type,
+            'url' => $validated['url'],
+            'quality' => $quality,
+            'is_primary' => $validated['is_primary'] ?? ! VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
+            'is_active' => true,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => ucfirst($type) . ' source added.',
+            'message' => ucfirst($type).' source added.',
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
 
     private function handleTelegramSource(Movie $movie, array $validated, string $quality, array $creatorMeta): JsonResponse
     {
-        if ($capacityError = $this->rejectTeleObPortalOverflow()) {
-            return $capacityError;
-        }
-
         $telegramUrl = trim((string) ($validated['url'] ?? ''));
         if ($telegramUrl === '') {
             return response()->json(['success' => false, 'message' => 'Telegram URL is required.'], 422);
         }
 
-        $source = VideoSource::create([
-            'sourceable_type' => Movie::class,
-            'sourceable_id'   => $movie->id,
-            'type'            => 'tele_ob',
-            'url'             => $telegramUrl,
-            'format'          => 'mp4',
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'provider'        => 'tele_ob',
-                'storage_target'  => 'contabo_object_storage',
-                'fetch_status'    => 'queued',
-                'fetch_mode'      => 'tele_ob_queue',
-                'telegram_status' => 'telegram_submitted',
-                'telegram_url'    => $telegramUrl,
-                'source_url'      => $telegramUrl,
-                'source_role'     => 'telegram',
-                'last_message'    => 'Telegram to Object Storage import queued.',
-                'queued_at'       => now()->toDateTimeString(),
-            ], $creatorMeta),
-        ]);
-
-        TelegramToContaboImportJob::dispatch($source->id)->onQueue('tele-ob-imports');
+        try {
+            $source = $this->nbx->submitTelegram($movie, $this->creatorNbxPayload(
+                $validated,
+                $telegramUrl,
+                $quality,
+                $creatorMeta,
+                ! VideoSource::where('sourceable_type', Movie::class)->where('sourceable_id', $movie->id)->exists(),
+            ), 'movie');
+            $submission = $this->workflow->submission($movie, request()->user(), 'telegram');
+            $this->workflow->markProcessing($movie, $submission, 'queued', [
+                'video_source_id' => $source->id,
+                'processing_job_id' => $source->processing_job_id,
+                'status_message' => 'NBX accepted the Telegram post and handed it to Teletyde.',
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Telegram import queued. Telebot will fetch it and Portal will store it on Object Storage.',
+            'message' => 'Telegram import queued through NBX. Teletyde will provide a signed source URL for processing.',
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
@@ -535,35 +520,23 @@ class CreatorSourceController extends CreatorBaseController
             return response()->json(['success' => false, 'message' => 'Video URL is required.'], 422);
         }
 
-        $source = VideoSource::create([
-            'sourceable_type' => Episode::class,
-            'sourceable_id'   => $episode->id,
-            'type'            => 'contabo_object_storage',
-            'url'             => $url,
-            'quality'         => $quality,
-            'format'          => 'mp4',
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'provider'       => 'contabo_object_storage',
-                'storage_target' => 'contabo_object_storage',
-                'fetch_status'   => 'queued',
-                'fetch_mode'     => 'creator_queue',
-                'source_url'     => $url,
-                'last_message'   => 'Episode remote URL import queued for Contabo Object Storage.',
-                'queued_at'      => now()->toDateTimeString(),
-            ], $creatorMeta),
-        ]);
-
-        FetchVideoFromUrlJob::dispatch(
-            $source->id,
-            $url,
-            Episode::class,
-            (int) $episode->id,
-            $quality,
-            'auto',
-            'contabo_object_storage'
-        )->onQueue('contabo-imports');
+        try {
+            $source = $this->nbx->submitRemote($episode, $this->creatorNbxPayload(
+                $validated,
+                $url,
+                $quality,
+                $creatorMeta,
+                ! VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
+            ), 'episode');
+            $submission = $this->workflow->submission($episode, request()->user(), 'remote_url');
+            $this->workflow->markProcessing($episode, $submission, 'queued', [
+                'video_source_id' => $source->id,
+                'processing_job_id' => $source->processing_job_id,
+                'status_message' => 'NBX accepted the episode URL.',
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
         return response()->json([
             'success' => true,
@@ -576,81 +549,82 @@ class CreatorSourceController extends CreatorBaseController
     {
         $source = VideoSource::create([
             'sourceable_type' => Episode::class,
-            'sourceable_id'   => $episode->id,
-            'type'            => $type,
-            'url'             => $validated['url'],
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
-            'is_active'       => true,
+            'sourceable_id' => $episode->id,
+            'type' => $type,
+            'url' => $validated['url'],
+            'quality' => $quality,
+            'is_primary' => $validated['is_primary'] ?? ! VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
+            'is_active' => true,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => ucfirst($type) . ' episode source added.',
+            'message' => ucfirst($type).' episode source added.',
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
 
     private function handleEpisodeTelegramSource(Episode $episode, array $validated, string $quality, array $creatorMeta): JsonResponse
     {
-        if ($capacityError = $this->rejectTeleObPortalOverflow()) {
-            return $capacityError;
-        }
-
         $telegramUrl = trim((string) ($validated['url'] ?? ''));
         if ($telegramUrl === '') {
             return response()->json(['success' => false, 'message' => 'Telegram URL is required.'], 422);
         }
 
-        $source = VideoSource::create([
-            'sourceable_type' => Episode::class,
-            'sourceable_id'   => $episode->id,
-            'type'            => 'tele_ob',
-            'url'             => $telegramUrl,
-            'format'          => 'mp4',
-            'quality'         => $quality,
-            'is_primary'      => $validated['is_primary'] ?? !VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
-            'is_active'       => false,
-            'metadata'        => array_merge([
-                'provider'        => 'tele_ob',
-                'storage_target'  => 'contabo_object_storage',
-                'fetch_status'    => 'queued',
-                'fetch_mode'      => 'tele_ob_queue',
-                'telegram_status' => 'telegram_submitted',
-                'telegram_url'    => $telegramUrl,
-                'source_url'      => $telegramUrl,
-                'source_role'     => 'telegram',
-                'last_message'    => 'Episode Telegram to Object Storage import queued.',
-                'queued_at'       => now()->toDateTimeString(),
-            ], $creatorMeta),
-        ]);
-
-        TelegramToContaboImportJob::dispatch($source->id)->onQueue('tele-ob-imports');
+        try {
+            $source = $this->nbx->submitTelegram($episode, $this->creatorNbxPayload(
+                $validated,
+                $telegramUrl,
+                $quality,
+                $creatorMeta,
+                ! VideoSource::where('sourceable_type', Episode::class)->where('sourceable_id', $episode->id)->exists(),
+            ), 'episode');
+            $submission = $this->workflow->submission($episode, request()->user(), 'telegram');
+            $this->workflow->markProcessing($episode, $submission, 'queued', [
+                'video_source_id' => $source->id,
+                'processing_job_id' => $source->processing_job_id,
+                'status_message' => 'NBX accepted the Telegram post and handed it to Teletyde.',
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
 
         return response()->json([
             'success' => true,
-            'message' => 'Episode Telegram import queued. Telebot will fetch it and Portal will store it on Object Storage.',
+            'message' => 'Episode Telegram import queued through NBX.',
             'data' => $this->formatVideoSource($source),
         ], 201);
     }
 
-    private function rejectTeleObPortalOverflow(): ?JsonResponse
-    {
-        $limit = max(1, (int) config('services.telebot.max_portal_objects', 3));
-        $active = VideoSource::query()
-            ->where('type', 'tele_ob')
-            ->where('is_active', false)
-            ->whereIn('metadata->fetch_status', ['queued', 'processing', 'downloading'])
-            ->count();
-
-        if ($active < $limit) {
-            return null;
-        }
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Tele-OB queue is currently full. Wait for one Telegram import to finish before adding another.',
-        ], 429);
+    private function creatorNbxPayload(
+        array $validated,
+        string $telegramUrl,
+        string $quality,
+        array $creatorMeta,
+        bool $defaultPrimary,
+    ): array {
+        return [
+            'url' => $telegramUrl,
+            'quality' => $quality,
+            'format' => 'mp4',
+            'is_primary' => (bool) ($validated['is_primary'] ?? $defaultPrimary),
+            'is_active' => true,
+            'metadata' => $creatorMeta,
+            'nbx_storage_target' => 'contabo',
+            'nbx_faststart' => true,
+            'nbx_compress_enabled' => (bool) ($validated['compress_enabled'] ?? false),
+            'nbx_hls_480p' => (bool) ($validated['hls_480p'] ?? false),
+            'nbx_hls_720p' => (bool) ($validated['hls_720p'] ?? false),
+            'nbx_hls_1080p' => (bool) ($validated['hls_1080p'] ?? false),
+            'nbx_allow_downloads' => true,
+            'nbx_allow_hls_streaming' => true,
+            'nbx_retention_policy' => (string) ($validated['retention_policy'] ?? 'optimized_only'),
+            'nbx_processing_preset' => 'automatic',
+            'nbx_max_resolution' => (string) ($validated['max_resolution'] ?? 720),
+            'nbx_crf' => 23,
+            'nbx_encoder_preset' => 'medium',
+            'nbx_audio_bitrate' => '128k',
+        ];
     }
 
     private function rejectOversizedCreatorUpload(?int $size): ?JsonResponse
@@ -671,9 +645,128 @@ class CreatorSourceController extends CreatorBaseController
 
         return response()->json([
             'success' => false,
-            'message' => 'Direct uploads are limited to ' . $this->formatBytes($maxBytes) . ' per movie source.',
+            'message' => 'Direct uploads are limited to '.$this->formatBytes($maxBytes).' per movie source.',
             'max_bytes' => $maxBytes,
         ], 422);
+    }
+
+    private function handleDirectUpload(
+        Movie|Episode $content,
+        array $validated,
+        string $quality,
+        array $creatorMeta,
+        string $assetType
+    ): JsonResponse {
+        $filename = trim((string) ($validated['filename'] ?? ''));
+        $size = isset($validated['size']) ? (int) $validated['size'] : null;
+        $mime = isset($validated['mime']) ? strtolower(trim((string) $validated['mime'])) : null;
+        if ($tooLarge = $this->rejectOversizedCreatorUpload($size)) {
+            return $tooLarge;
+        }
+
+        $extension = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+        if (! in_array($extension, (array) config('creator.allowed_video_extensions'), true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "The .{$extension} container is not allowed for creator uploads.",
+            ], 422);
+        }
+        if ($mime && ! in_array($mime, (array) config('creator.allowed_video_mimes'), true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "The declared MIME type {$mime} is not allowed.",
+            ], 422);
+        }
+
+        $profileKey = (string) ($validated['processing_profile'] ?? 'balanced');
+        $profiles = (array) config('creator.processing_profiles', []);
+        $profile = (array) ($profiles[$profileKey] ?? $profiles['balanced'] ?? []);
+        $payload = [
+            'filename' => $filename,
+            'size_bytes' => $size,
+            'mime_type' => $mime,
+            'extension' => $extension,
+            'quality' => $quality,
+            'is_primary' => (bool) ($validated['is_primary'] ?? ! $content->videoSources()->exists()),
+            'is_active' => true,
+            'metadata' => array_merge($creatorMeta, ['processing_profile' => $profileKey]),
+            'nbx_storage_target' => 'contabo',
+            'nbx_faststart' => (bool) ($profile['faststart_enabled'] ?? true),
+            'nbx_compress_enabled' => (bool) ($profile['compress_enabled'] ?? true),
+            'nbx_hls_480p' => (bool) ($profile['hls_480p'] ?? true),
+            'nbx_hls_720p' => (bool) ($profile['hls_720p'] ?? true),
+            'nbx_hls_1080p' => (bool) ($profile['hls_1080p'] ?? false),
+            'nbx_allow_downloads' => true,
+            'nbx_allow_hls_streaming' => true,
+            'nbx_retention_policy' => (string) ($profile['retention_policy'] ?? 'optimized_only'),
+            'nbx_processing_preset' => 'automatic',
+            'nbx_max_resolution' => (int) ($profile['max_resolution'] ?? 1080),
+            'nbx_crf' => 23,
+            'nbx_encoder_preset' => 'medium',
+            'nbx_audio_bitrate' => '128k',
+        ];
+
+        try {
+            $nbxSession = $this->nbx->initDirectUploadSession($content, $payload, $assetType);
+        } catch (\Throwable $exception) {
+            return response()->json(['success' => false, 'message' => $exception->getMessage()], 422);
+        }
+
+        $submission = $this->workflow->submission($content, request()->user(), 'direct_upload');
+        $this->workflow->markProcessing($content, $submission, 'uploading', [
+            'processing_profile' => array_merge(['key' => $profileKey], $profile),
+            'status_message' => 'Waiting for the browser to upload directly to NBX.',
+        ]);
+        $nbxSessionId = (string) ($nbxSession['session_id'] ?? '');
+        $token = (string) ($nbxSession['headers']['X-NBX-Upload-Token'] ?? '');
+        if ($nbxSessionId !== '' && $token !== '') {
+            CreatorUploadSession::updateOrCreate(
+                ['id' => $nbxSessionId],
+                [
+                    'submission_id' => $submission->id,
+                    'user_id' => request()->user()->id,
+                    'token_hash' => hash('sha256', $token),
+                    'filename' => $filename,
+                    'mime_type' => $mime,
+                    'size_bytes' => $size,
+                    'processing_profile' => array_merge(['key' => $profileKey], $profile),
+                    'expires_at' => $nbxSession['expires_at'] ?? now()->addMinutes((int) config('creator.upload_session_ttl_minutes', 30)),
+                    'remote_ip' => request()->ip(),
+                ]
+            );
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Short-lived upload session created. Send the file directly to NBX.',
+            'data' => [
+                'submission' => $this->formatSubmission($submission->fresh()),
+                'upload_session' => $nbxSession,
+            ],
+        ], 201);
+    }
+
+    private function formatSubmission(CreatorContentSubmission $submission): array
+    {
+        return [
+            'id' => $submission->id,
+            'submission_source' => $submission->submission_source,
+            'processing_status' => $submission->processing_status,
+            'editorial_status' => $submission->editorial_status,
+            'publication_status' => $submission->publication_status,
+            'monetization_status' => $submission->monetization_status,
+            'processing_job_id' => $submission->processing_job_id,
+            'video_source_id' => $submission->video_source_id,
+            'progress_percent' => $submission->progress_percent,
+            'processing_stage' => $submission->processing_stage,
+            'status_message' => $submission->status_message,
+            'failure_reason' => $submission->failure_reason,
+            'processing_profile' => $submission->processing_profile,
+            'result_metadata' => $submission->result_metadata,
+            'retry_count' => $submission->retry_count,
+            'completed_at' => $submission->completed_at?->toIso8601String(),
+            'updated_at' => $submission->updated_at?->toIso8601String(),
+        ];
     }
 
     private function creatorDirectUploadMaxBytes(): int
@@ -692,21 +785,24 @@ class CreatorSourceController extends CreatorBaseController
             $index++;
         }
 
-        return rtrim(rtrim(number_format($value, 2), '0'), '.') . ' ' . $units[$index];
+        return rtrim(rtrim(number_format($value, 2), '0'), '.').' '.$units[$index];
     }
 
     private function buildCreatorMeta(\App\Models\User $user, Movie $movie): array
     {
         $meta = ['portal_movie_id' => $movie->id];
 
-        if ($user->isVJ()) {
+        if ($this->resolveVjProfile($user)) {
             $vj = $this->resolveVjProfile($user);
-            $meta['creator_ref'] = $vj ? 'vj:' . $vj->id : 'user:' . $user->id;
+            $meta['creator_ref'] = $vj ? 'vj:'.$vj->id : 'user:'.$user->id;
             $meta['creator_type'] = 'vj';
-        } elseif ($user->isMediaLibrary()) {
+        } elseif ($this->resolveMediaLibraryProfile($user)) {
             $library = $this->resolveMediaLibraryProfile($user);
-            $meta['creator_ref'] = $library ? 'media_library:' . $library->id : 'user:' . $user->id;
+            $meta['creator_ref'] = $library ? 'media_library:'.$library->id : 'user:'.$user->id;
             $meta['creator_type'] = 'media_library';
+        } else {
+            $meta['creator_ref'] = 'user:'.$user->id;
+            $meta['creator_type'] = 'applicant';
         }
 
         return $meta;
@@ -721,14 +817,17 @@ class CreatorSourceController extends CreatorBaseController
             'portal_season_id' => $episode->season_id,
         ];
 
-        if ($user->isVJ()) {
+        if ($this->resolveVjProfile($user)) {
             $vj = $this->resolveVjProfile($user);
-            $meta['creator_ref'] = $vj ? 'vj:' . $vj->id : 'user:' . $user->id;
+            $meta['creator_ref'] = $vj ? 'vj:'.$vj->id : 'user:'.$user->id;
             $meta['creator_type'] = 'vj';
-        } elseif ($user->isMediaLibrary()) {
+        } elseif ($this->resolveMediaLibraryProfile($user)) {
             $library = $this->resolveMediaLibraryProfile($user);
-            $meta['creator_ref'] = $library ? 'media_library:' . $library->id : 'user:' . $user->id;
+            $meta['creator_ref'] = $library ? 'media_library:'.$library->id : 'user:'.$user->id;
             $meta['creator_type'] = 'media_library';
+        } else {
+            $meta['creator_ref'] = 'user:'.$user->id;
+            $meta['creator_type'] = 'applicant';
         }
 
         return $meta;

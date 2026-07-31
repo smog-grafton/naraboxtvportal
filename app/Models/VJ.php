@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Str;
 
 class VJ extends Model
@@ -28,6 +29,11 @@ class VJ extends Model
         'is_active',
         'user_id',
         'is_verified',
+        'languages',
+        'location',
+        'official_links',
+        'public_email',
+        'profile_review_status',
     ];
 
     protected function casts(): array
@@ -37,6 +43,8 @@ class VJ extends Model
             'is_featured' => 'boolean',
             'is_active' => 'boolean',
             'is_verified' => 'boolean',
+            'languages' => 'array',
+            'official_links' => 'array',
         ];
     }
 
@@ -64,5 +72,25 @@ class VJ extends Model
     public function movies(): HasMany
     {
         return $this->hasMany(Movie::class, 'vj_id');
+    }
+
+    public function tvShows(): HasMany
+    {
+        return $this->hasMany(TVShow::class, 'vj_id');
+    }
+
+    public function claims(): MorphMany
+    {
+        return $this->morphMany(CreatorClaim::class, 'claimable');
+    }
+
+    public function ownershipHistory(): MorphMany
+    {
+        return $this->morphMany(CreatorProfileOwnershipHistory::class, 'profile');
+    }
+
+    public function profileChangeRequests(): MorphMany
+    {
+        return $this->morphMany(CreatorProfileChangeRequest::class, 'profile');
     }
 }

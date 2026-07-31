@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\HeroSlide;
 use App\Models\Movie;
+use App\Models\TVShow;
 use Illuminate\Http\Request;
 
 /**
@@ -19,15 +20,44 @@ class HeroController extends Controller
      */
     public function index()
     {
-        $slides = HeroSlide::where('is_active', true)
+        $heroSlides = HeroSlide::where('is_active', true)
             ->with(['media' => function ($query) {
                 $query->with(['genres', 'vj', 'mediaLibrary', 'category']);
             }])
             ->orderBy('order')
+            ->get();
+
+        // TV shows are still selectable through legacy Movie mirror rows in
+        // HeroSlide. Resolve those mirrors to the canonical TVShow record once,
+        // so every client receives the correct entity id, slug and media type.
+        $seriesSlugs = $heroSlides
+            ->map(fn ($slide) => $slide->media)
+            ->filter(fn ($media) => $media && strtoupper((string) $media->media_type) === 'SERIES')
+            ->pluck('slug')
+            ->filter()
+            ->unique()
+            ->values();
+
+        $tvShowsBySlug = TVShow::query()
+            ->where('is_active', true)
+            ->whereIn('slug', $seriesSlugs)
+            ->with(['genres', 'vj', 'mediaLibrary', 'category'])
             ->get()
-            ->map(function ($slide) {
-                $movie = $slide->media;
-                if (!$movie || !$movie->is_active) {
+            ->keyBy('slug');
+
+        $slides = $heroSlides
+            ->map(function ($slide) use ($tvShowsBySlug) {
+                $legacyMedia = $slide->media;
+                if (! $legacyMedia || ! $legacyMedia->is_active) {
+                    return null;
+                }
+
+                $isSeries = strtoupper((string) $legacyMedia->media_type) === 'SERIES';
+                $media = $isSeries ? $tvShowsBySlug->get($legacyMedia->slug) : $legacyMedia;
+
+                // A stale series mirror must never be advertised as a movie.
+                // Omitting it is safer than opening a source-less Movie record.
+                if (! $media) {
                     return null;
                 }
                 
@@ -41,24 +71,28 @@ class HeroController extends Controller
                 };
 
                 return [
-                    'id' => $movie->id,
-                    'slug' => $movie->slug,
-                    'title' => $movie->title,
-                    'description' => $movie->description,
-                    'thumbnail' => $getImageUrl($movie->thumbnail),
-                    'backdrop' => $getImageUrl($movie->backdrop),
-                    'rating' => (float) $movie->rating,
-                    'releaseDate' => $movie->release_date->format('Y-m-d'),
-                    'category' => $movie->category->name,
-                    'mediaType' => $movie->media_type,
-                    'vj' => $movie->vj ? $movie->vj->name : null,
-                    'creator' => $this->formatCreator($movie),
-                    'genre' => $movie->genres->pluck('name')->toArray(),
-                    'trendingScore' => $movie->trending_score,
-                    'accessType' => $movie->access_type,
-                    'videoUrl' => $movie->video_url,
-                    'priceRent' => $movie->price_rent ? (int) $movie->price_rent : null,
-                    'priceBuy' => $movie->price_buy ? (int) $movie->price_buy : null,
+                    'slide_id' => $slide->id,
+                    'id' => $media->id,
+                    'media_id' => $media->id,
+                    'slug' => $media->slug,
+                    'media_slug' => $media->slug,
+                    'title' => $media->title,
+                    'description' => $media->description,
+                    'thumbnail' => $getImageUrl($media->thumbnail),
+                    'backdrop' => $getImageUrl($media->backdrop),
+                    'rating' => (float) $media->rating,
+                    'releaseDate' => $media->release_date?->format('Y-m-d'),
+                    'category' => $media->category?->name,
+                    'mediaType' => $isSeries ? 'TV_SHOW' : 'MOVIE',
+                    'media_type' => $isSeries ? 'TV_SHOW' : 'MOVIE',
+                    'vj' => $media->vj?->name,
+                    'creator' => $this->formatCreator($media),
+                    'genre' => $media->genres->pluck('name')->toArray(),
+                    'trendingScore' => $media->trending_score,
+                    'accessType' => $media->access_type,
+                    'videoUrl' => $isSeries ? null : $media->video_url,
+                    'priceRent' => $media->price_rent ? (int) $media->price_rent : null,
+                    'priceBuy' => $media->price_buy ? (int) $media->price_buy : null,
                 ];
             })
             ->filter()
@@ -69,7 +103,7 @@ class HeroController extends Controller
         ]);
     }
 
-    private function formatCreator(Movie $movie): ?array
+    private function formatCreator(Movie|TVShow $movie): ?array
     {
         $getImageUrl = function ($path) {
             if (empty($path)) return null;

@@ -23,6 +23,12 @@ class CreatorWithdrawalRequest extends Model
         'gateway_used',
         'gateway_reference',
         'meta',
+        'amount_minor',
+        'currency',
+        'idempotency_key',
+        'provider_status',
+        'last_reconciled_at',
+        'provider_confirmed_at',
     ];
 
     protected function casts(): array
@@ -33,6 +39,8 @@ class CreatorWithdrawalRequest extends Model
             'approved_at' => 'datetime',
             'processed_at' => 'datetime',
             'meta' => 'array',
+            'last_reconciled_at' => 'datetime',
+            'provider_confirmed_at' => 'datetime',
         ];
     }
 

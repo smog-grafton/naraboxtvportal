@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Resources\FinancialSettingResource;
 use App\Models\FinancialSetting;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\TextInput;
@@ -32,20 +33,12 @@ class FinancialSettingsPage extends Page implements HasForms
 
     public function mount(): void
     {
-        $settings = FinancialSetting::current();
-        $this->form->fill(
-            $settings
-                ? $settings->only([
-                    'commission_rate',
-                    'creator_hold_days',
-                    'min_withdrawal_amount',
-                    'auto_payout_enabled',
-                    'unverified_creator_earns',
-                    'iotec_disbursement_enabled',
-                    'pawapay_disbursement_enabled',
-                ])
-                : []
-        );
+        $this->redirect(FinancialSettingResource::getUrl());
+    }
+
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
     }
 
     public function form(Form $form): Form
@@ -117,5 +110,4 @@ class FinancialSettingsPage extends Page implements HasForms
             ->success()
             ->send();
     }
-
 }

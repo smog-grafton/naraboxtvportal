@@ -13,6 +13,10 @@ use Filament\Tables\Table;
 use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\Model;
 use Filament\Notifications\Notification;
+use App\Filament\Resources\VJResource\RelationManagers\ClaimsRelationManager;
+use App\Filament\Resources\VJResource\RelationManagers\MoviesRelationManager;
+use App\Filament\Resources\VJResource\RelationManagers\TVShowsRelationManager;
+use App\Filament\Resources\VJResource\RelationManagers\OwnershipHistoryRelationManager;
 
 class VJResource extends Resource
 {
@@ -45,6 +49,19 @@ class VJResource extends Resource
                         Forms\Components\Textarea::make('bio')
                             ->rows(4)
                             ->columnSpanFull(),
+                        Forms\Components\TagsInput::make('languages'),
+                        Forms\Components\TextInput::make('location')->maxLength(255),
+                        Forms\Components\TextInput::make('public_email')->email()->maxLength(255),
+                        Forms\Components\KeyValue::make('official_links')
+                            ->keyLabel('Network')
+                            ->valueLabel('Public URL')
+                            ->columnSpanFull(),
+                        Forms\Components\Select::make('user_id')
+                            ->label('Linked creator account')
+                            ->relationship('user', 'name')
+                            ->searchable()
+                            ->preload()
+                            ->helperText('Link only after an approved identity claim.'),
                     ])->columns(2),
 
                 Forms\Components\Section::make('Media')
@@ -177,6 +194,10 @@ class VJResource extends Resource
                     ->label('Featured')
                     ->boolean()
                     ->sortable(),
+                Tables\Columns\IconColumn::make('is_verified')
+                    ->label('Verified')
+                    ->boolean()
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('genres.name')
                     ->label('Specialties')
                     ->badge()
@@ -237,6 +258,16 @@ class VJResource extends Resource
             'index' => Pages\ListVJS::route('/'),
             'create' => Pages\CreateVJ::route('/create'),
             'edit' => Pages\EditVJ::route('/{record}/edit'),
+        ];
+    }
+
+    public static function getRelations(): array
+    {
+        return [
+            MoviesRelationManager::class,
+            TVShowsRelationManager::class,
+            ClaimsRelationManager::class,
+            OwnershipHistoryRelationManager::class,
         ];
     }
 }

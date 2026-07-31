@@ -26,7 +26,7 @@ class VideoFetchController extends Controller
         $request->validate([
             'url' => 'required|url',
             'sourceable_type' => 'required|string|in:App\Models\Movie,App\Models\Episode',
-            'sourceable_id' => 'required|integer|exists:' . ($request->input('sourceable_type') === 'App\Models\Movie' ? 'movies' : 'episodes') . ',id',
+            'sourceable_id' => 'required|integer|exists:'.($request->input('sourceable_type') === 'App\Models\Movie' ? 'movies' : 'episodes').',id',
             'quality' => 'nullable|string|max:50',
             'format' => 'nullable|string|max:10',
             'import_mode' => 'nullable|string|in:now,queue',
@@ -127,8 +127,8 @@ class VideoFetchController extends Controller
                 ->first();
 
             $title = $sourceableType === 'App\Models\Episode'
-                ? ('Episode ' . $sourceableId)
-                : ('Movie ' . $sourceableId);
+                ? ('Episode '.$sourceableId)
+                : ('Movie '.$sourceableId);
 
             try {
                 $cdnImport = $cdnService->importFromUrl(
@@ -287,7 +287,7 @@ class VideoFetchController extends Controller
                         'fetch_status' => $this->toFetchStatus($cdnStatus),
                         'fetch_mode' => $importMode,
                         'fetch_strategy' => $importStrategy,
-                        'last_message' => is_string($cdnFailure) && $cdnFailure !== '' ? $cdnFailure : ('CDN import status: ' . strtoupper($cdnStatus)),
+                        'last_message' => is_string($cdnFailure) && $cdnFailure !== '' ? $cdnFailure : ('CDN import status: '.strtoupper($cdnStatus)),
                         'cdn_asset_id' => $cdnAssetId,
                         'cdn_source_id' => $cdnSourceId,
                         'cdn_status' => $cdnStatus,
@@ -311,7 +311,7 @@ class VideoFetchController extends Controller
                         'fetch_status' => $this->toFetchStatus($cdnStatus),
                         'fetch_mode' => $importMode,
                         'fetch_strategy' => $importStrategy,
-                        'last_message' => is_string($cdnFailure) && $cdnFailure !== '' ? $cdnFailure : ('CDN import status: ' . strtoupper($cdnStatus)),
+                        'last_message' => is_string($cdnFailure) && $cdnFailure !== '' ? $cdnFailure : ('CDN import status: '.strtoupper($cdnStatus)),
                         'cdn_asset_id' => $cdnAssetId,
                         'cdn_source_id' => $cdnSourceId,
                         'cdn_status' => $cdnStatus,
@@ -375,10 +375,11 @@ class VideoFetchController extends Controller
                 'file_path' => $videoSource->file_path,
             ]);
         } catch (\Exception $e) {
-            Log::error('Video fetch error: ' . $e->getMessage());
+            Log::error('Video fetch error: '.$e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'message' => 'Error fetching video: ' . $e->getMessage(),
+                'message' => 'Error fetching video: '.$e->getMessage(),
             ], 500);
         }
     }
@@ -612,7 +613,7 @@ class VideoFetchController extends Controller
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
         $path = (string) parse_url($url, PHP_URL_PATH);
 
-        if ($host !== 'cdn.naraboxtv.com') {
+        if ($host !== 'nbx.naraboxtv.com') {
             return false;
         }
 
@@ -637,17 +638,17 @@ class VideoFetchController extends Controller
         $path = (string) ($parts['path'] ?? '/');
         $normalizedPath = $this->normalizeUrlPath($path);
 
-        $rebuilt = $parts['scheme'] . '://' . $parts['host'];
+        $rebuilt = $parts['scheme'].'://'.$parts['host'];
         if (isset($parts['port'])) {
-            $rebuilt .= ':' . $parts['port'];
+            $rebuilt .= ':'.$parts['port'];
         }
         $rebuilt .= $normalizedPath;
 
         if (isset($parts['query']) && $parts['query'] !== '') {
-            $rebuilt .= '?' . $this->normalizeUrlQueryOrFragment((string) $parts['query']);
+            $rebuilt .= '?'.$this->normalizeUrlQueryOrFragment((string) $parts['query']);
         }
         if (isset($parts['fragment']) && $parts['fragment'] !== '') {
-            $rebuilt .= '#' . $this->normalizeUrlQueryOrFragment((string) $parts['fragment']);
+            $rebuilt .= '#'.$this->normalizeUrlQueryOrFragment((string) $parts['fragment']);
         }
 
         return $rebuilt;
@@ -668,7 +669,7 @@ class VideoFetchController extends Controller
 
         $rebuilt = implode('/', $encodedSegments);
 
-        return str_starts_with($rebuilt, '/') ? $rebuilt : '/' . $rebuilt;
+        return str_starts_with($rebuilt, '/') ? $rebuilt : '/'.$rebuilt;
     }
 
     private function normalizeUrlQueryOrFragment(string $value): string
@@ -886,7 +887,7 @@ class VideoFetchController extends Controller
      * Ensure sibling VideoSources exist for MP4 Playback and HLS Master URLs (same sourceable, same CDN asset/source).
      * Optionally create HLS variant sources from playback qualities.
      *
-     * @param array<int, array{id?: string, label?: string, url?: string}> $qualities
+     * @param  array<int, array{id?: string, label?: string, url?: string}>  $qualities
      */
     private function ensureSiblingSourcesForFetch(
         VideoSource $primary,
@@ -989,7 +990,7 @@ class VideoFetchController extends Controller
                 continue;
             }
             $variantUrl = $q['url'];
-            $qualityId = $q['id'] ?? ('q-' . md5($variantUrl));
+            $qualityId = $q['id'] ?? ('q-'.md5($variantUrl));
             $label = $q['label'] ?? $qualityId;
 
             $existing = VideoSource::where('sourceable_type', $sourceableType)
@@ -1043,12 +1044,12 @@ class VideoFetchController extends Controller
         parse_str((string) ($parts['query'] ?? ''), $query);
         $query['download'] = '1';
 
-        $rebuilt = ($parts['scheme'] ?? 'https') . '://' . ($parts['host'] ?? '');
+        $rebuilt = ($parts['scheme'] ?? 'https').'://'.($parts['host'] ?? '');
         if (isset($parts['port'])) {
-            $rebuilt .= ':' . $parts['port'];
+            $rebuilt .= ':'.$parts['port'];
         }
         $rebuilt .= (string) ($parts['path'] ?? '');
-        $rebuilt .= '?' . http_build_query($query);
+        $rebuilt .= '?'.http_build_query($query);
 
         return $rebuilt;
     }

@@ -8,6 +8,12 @@ use Illuminate\Database\Eloquent\Builder;
 
 class CreatorPayoutMethod extends Model
 {
+    protected $hidden = [
+        'phone_number',
+        'account_number',
+        'protected_details',
+    ];
+
     protected $fillable = [
         'user_id',
         'method_type',
@@ -20,6 +26,13 @@ class CreatorPayoutMethod extends Model
         'is_default',
         'is_verified',
         'metadata',
+        'protected_details',
+        'details_fingerprint',
+        'verification_status',
+        'verified_by',
+        'verified_at',
+        'changed_at',
+        'withdrawal_hold_until',
     ];
 
     protected function casts(): array
@@ -28,6 +41,10 @@ class CreatorPayoutMethod extends Model
             'is_default' => 'boolean',
             'is_verified' => 'boolean',
             'metadata' => 'array',
+            'protected_details' => 'encrypted:array',
+            'verified_at' => 'datetime',
+            'changed_at' => 'datetime',
+            'withdrawal_hold_until' => 'datetime',
         ];
     }
 
@@ -48,17 +65,39 @@ class CreatorPayoutMethod extends Model
 
     public function getMaskedPhoneAttribute(): ?string
     {
-        if (!$this->phone_number || strlen($this->phone_number) < 4) {
+        $phone = $this->protected_details['phone_number'] ?? $this->phone_number;
+        if (!$phone || strlen($phone) < 4) {
             return null;
         }
-        return '****' . substr($this->phone_number, -4);
+        return '•••• ' . substr($phone, -4);
     }
 
     public function getMaskedAccountAttribute(): ?string
     {
-        if (!$this->account_number || strlen($this->account_number) < 4) {
+        $account = $this->protected_details['account_number'] ?? $this->account_number;
+        if (!$account || strlen($account) < 4) {
             return null;
         }
-        return '****' . substr($this->account_number, -4);
+        return '•••• ' . substr($account, -4);
+    }
+
+    public function getMaskedAccountNameAttribute(): ?string
+    {
+        $name = trim((string) ($this->protected_details['account_name'] ?? $this->account_name));
+        if ($name === '') {
+            return null;
+        }
+        $parts = preg_split('/\s+/', $name) ?: [];
+
+        return collect($parts)->map(
+            fn (string $part) => mb_substr($part, 0, 1).str_repeat('•', max(2, mb_strlen($part) - 1))
+        )->implode(' ');
+    }
+
+    public function destination(string $key): ?string
+    {
+        $protected = $this->protected_details ?? [];
+
+        return $protected[$key] ?? $this->getAttribute($key);
     }
 }

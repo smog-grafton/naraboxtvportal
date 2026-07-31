@@ -17,6 +17,8 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Filament\Notifications\Notification;
+use App\Services\CreatorContentWorkflowService;
+use App\Services\UserNotificationService;
 
 class TVShowResource extends Resource
 {
@@ -387,6 +389,10 @@ class TVShowResource extends Resource
                     ->label('Status')
                     ->badge()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('submission_origin')->badge()->toggleable(),
+                Tables\Columns\TextColumn::make('processing_status')->badge()->toggleable(),
+                Tables\Columns\TextColumn::make('editorial_status')->badge()->toggleable(),
+                Tables\Columns\TextColumn::make('publication_status')->badge()->toggleable(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
@@ -421,6 +427,71 @@ class TVShowResource extends Resource
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('approve_creator_submission')
+                    ->label('Approve submission')
+                    ->icon('heroicon-o-check-circle')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->visible(fn (TVShow $record) => in_array($record->editorial_status, ['submitted_for_review', 'under_review'], true))
+                    ->action(fn (TVShow $record) => app(CreatorContentWorkflowService::class)
+                        ->moderate($record, auth()->user(), 'approved')),
+                Tables\Actions\Action::make('request_creator_changes')
+                    ->label('Request changes')
+                    ->icon('heroicon-o-pencil-square')
+                    ->color('warning')
+                    ->visible(fn (TVShow $record) => in_array($record->editorial_status, ['submitted_for_review', 'under_review'], true))
+                    ->form([
+                        Forms\Components\Textarea::make('creator_message')->required(),
+                        Forms\Components\TagsInput::make('requested_changes'),
+                        Forms\Components\Textarea::make('internal_notes'),
+                    ])
+                    ->action(fn (TVShow $record, array $data) => app(CreatorContentWorkflowService::class)->moderate(
+                        $record,
+                        auth()->user(),
+                        'changes_requested',
+                        $data['creator_message'],
+                        $data['internal_notes'] ?? null,
+                        $data['requested_changes'] ?? []
+                    )),
+                Tables\Actions\Action::make('approve_monetization')
+                    ->label('Approve monetization')
+                    ->icon('heroicon-o-banknotes')
+                    ->visible(fn (TVShow $record) => $record->monetization_status === 'pending_review' && $record->monetizationSetting)
+                    ->action(function (TVShow $record): void {
+                        $record->monetizationSetting->update([
+                            'status' => 'approved',
+                            'approved_by' => auth()->id(),
+                            'approved_at' => now(),
+                        ]);
+                        $record->update(['monetization_status' => 'enabled']);
+                    }),
+                Tables\Actions\Action::make('reassign_creator_owner')
+                    ->label('Reassign owner')
+                    ->icon('heroicon-o-arrows-right-left')
+                    ->form([
+                        Forms\Components\Select::make('owner_type')
+                            ->options(['vj' => 'VJ', 'media_library' => 'Media library', 'platform' => 'Platform managed'])
+                            ->required()
+                            ->live(),
+                        Forms\Components\Select::make('vj_id')
+                            ->options(fn () => \App\Models\VJ::orderBy('name')->pluck('name', 'id'))
+                            ->searchable()
+                            ->visible(fn (Forms\Get $get) => $get('owner_type') === 'vj')
+                            ->required(fn (Forms\Get $get) => $get('owner_type') === 'vj'),
+                        Forms\Components\Select::make('media_library_id')
+                            ->options(fn () => \App\Models\MediaLibrary::orderBy('name')->pluck('name', 'id'))
+                            ->searchable()
+                            ->visible(fn (Forms\Get $get) => $get('owner_type') === 'media_library')
+                            ->required(fn (Forms\Get $get) => $get('owner_type') === 'media_library'),
+                        Forms\Components\Textarea::make('reason')->required(),
+                    ])
+                    ->action(fn (TVShow $record, array $data) => app(CreatorContentWorkflowService::class)->reassignOwner(
+                        $record,
+                        auth()->user(),
+                        $data['owner_type'],
+                        $data['owner_type'] === 'vj' ? ($data['vj_id'] ?? null) : ($data['media_library_id'] ?? null),
+                        $data['reason']
+                    )),
                 Tables\Actions\Action::make('mark_dmca_removed')
                     ->label('Mark DMCA Removed')
                     ->icon('heroicon-o-shield-exclamation')

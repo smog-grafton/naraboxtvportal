@@ -12,7 +12,7 @@ class CreatorPayoutMethodController extends CreatorBaseController
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -29,7 +29,7 @@ class CreatorPayoutMethodController extends CreatorBaseController
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -51,7 +51,19 @@ class CreatorPayoutMethodController extends CreatorBaseController
             CreatorPayoutMethod::forUser($user->id)->update(['is_default' => false]);
         }
 
-        $method = CreatorPayoutMethod::create($validated);
+        $protected = [
+            'phone_number' => $validated['phone_number'] ?? null,
+            'account_name' => $validated['account_name'] ?? null,
+            'account_number' => $validated['account_number'] ?? null,
+        ];
+        unset($validated['phone_number'], $validated['account_name'], $validated['account_number']);
+        $method = CreatorPayoutMethod::create(array_merge($validated, [
+            'protected_details' => $protected,
+            'details_fingerprint' => hash_hmac('sha256', json_encode($protected), (string) config('app.key')),
+            'is_verified' => false,
+            'verification_status' => 'pending',
+            'changed_at' => now(),
+        ]));
 
         return response()->json([
             'success' => true,
@@ -62,7 +74,7 @@ class CreatorPayoutMethodController extends CreatorBaseController
     public function update(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -82,7 +94,23 @@ class CreatorPayoutMethodController extends CreatorBaseController
             CreatorPayoutMethod::forUser($user->id)->where('id', '!=', $id)->update(['is_default' => false]);
         }
 
-        $method->update($validated);
+        $protected = $method->protected_details ?? [];
+        foreach (['phone_number', 'account_name', 'account_number'] as $key) {
+            if (array_key_exists($key, $validated)) {
+                $protected[$key] = $validated[$key];
+                unset($validated[$key]);
+            }
+        }
+        $method->update(array_merge($validated, [
+            'protected_details' => $protected,
+            'details_fingerprint' => hash_hmac('sha256', json_encode($protected), (string) config('app.key')),
+            'is_verified' => false,
+            'verification_status' => 'pending',
+            'verified_by' => null,
+            'verified_at' => null,
+            'changed_at' => now(),
+            'withdrawal_hold_until' => now()->addHours((int) config('creator.payout_change_hold_hours', 48)),
+        ]));
 
         return response()->json([
             'success' => true,
@@ -93,7 +121,7 @@ class CreatorPayoutMethodController extends CreatorBaseController
     public function destroy(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -106,7 +134,7 @@ class CreatorPayoutMethodController extends CreatorBaseController
     public function setDefault(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -127,11 +155,13 @@ class CreatorPayoutMethodController extends CreatorBaseController
             'method_type' => $m->method_type,
             'provider' => $m->provider,
             'phone_number_masked' => $m->method_type === 'mobile_money' ? $m->masked_phone : null,
-            'account_name' => $m->account_name,
+            'account_name' => $m->masked_account_name,
             'account_number_masked' => $m->method_type === 'bank' ? $m->masked_account : null,
             'bank_name' => $m->bank_name,
             'is_default' => (bool) $m->is_default,
             'is_verified' => (bool) $m->is_verified,
+            'verification_status' => $m->verification_status ?? ($m->is_verified ? 'verified' : 'pending'),
+            'withdrawal_hold_until' => $m->withdrawal_hold_until?->toIso8601String(),
             'created_at' => $m->created_at?->toIso8601String(),
         ];
     }

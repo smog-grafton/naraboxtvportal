@@ -7,12 +7,12 @@ class CdnUrlDerivationService
     /**
      * CDN base host for URL building (configurable).
      */
-    protected string $cdnHost = 'cdn.naraboxtv.com';
+    protected string $cdnHost = 'nbx.naraboxtv.com';
 
     /**
      * Derive play and HLS master URLs from a CDN media URL.
      *
-     * Input: https://cdn.naraboxtv.com/media/{uuid}/{id}/Name_naraboxtv_com.mp4
+     * Input: https://nbx.naraboxtv.com/media/{uuid}/{id}/Name_naraboxtv_com.mp4
      * Output: [
      *   'download_url' => original URL,
      *   'play_url' => .../Name_naraboxtv_com_play.mp4,
@@ -32,12 +32,12 @@ class CdnUrlDerivationService
 
         $parsed = parse_url($url);
         $path = (string) ($parsed['path'] ?? '');
-        $path = '/' . trim($path, '/');
+        $path = '/'.trim($path, '/');
         $segments = array_values(array_filter(explode('/', $path)));
 
         $scheme = $parsed['scheme'] ?? 'https';
         $host = $parsed['host'] ?? $this->cdnHost;
-        $base = $scheme . '://' . $host;
+        $base = $scheme.'://'.$host;
 
         $uuid = null;
         $sourceId = null;
@@ -53,17 +53,17 @@ class CdnUrlDerivationService
             }
 
             $isPlayMp4 = str_ends_with(strtolower($filename), '_play.mp4');
-            $downloadUrl = $base . '/media/' . $uuid . '/' . $sourceId . '/' . $filename;
+            $downloadUrl = $base.'/media/'.$uuid.'/'.$sourceId.'/'.$filename;
 
             if ($isPlayMp4) {
                 $originalName = preg_replace('/_play\.mp4$/i', '.mp4', $filename);
                 $playUrl = $downloadUrl;
-                $downloadUrl = $base . '/media/' . $uuid . '/' . $sourceId . '/' . $originalName;
+                $downloadUrl = $base.'/media/'.$uuid.'/'.$sourceId.'/'.$originalName;
             } else {
-                $playUrl = $base . '/media/' . $uuid . '/' . $sourceId . '/' . preg_replace('/\.mp4$/i', '_play.mp4', $filename);
+                $playUrl = $base.'/media/'.$uuid.'/'.$sourceId.'/'.preg_replace('/\.mp4$/i', '_play.mp4', $filename);
             }
 
-            $hlsMasterUrl = $base . '/media-hls/' . $uuid . '/' . $sourceId . '/master.m3u8';
+            $hlsMasterUrl = $base.'/media-hls/'.$uuid.'/'.$sourceId.'/master.m3u8';
 
             return [
                 'download_url' => $downloadUrl,
@@ -81,7 +81,7 @@ class CdnUrlDerivationService
             if ($uuid === '' || $sourceId === null) {
                 return null;
             }
-            $hlsMasterUrl = $base . '/media-hls/' . $uuid . '/' . $sourceId . '/master.m3u8';
+            $hlsMasterUrl = $base.'/media-hls/'.$uuid.'/'.$sourceId.'/master.m3u8';
 
             return [
                 'download_url' => null,

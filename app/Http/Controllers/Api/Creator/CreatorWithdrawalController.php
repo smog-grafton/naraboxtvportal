@@ -18,7 +18,7 @@ class CreatorWithdrawalController extends CreatorBaseController
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -48,13 +48,13 @@ class CreatorWithdrawalController extends CreatorBaseController
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
         $validated = $request->validate([
             'payout_method_id' => ['required', 'integer', 'exists:creator_payout_methods,id'],
-            'amount' => ['required', 'numeric', 'min:1'],
+            'amount' => ['required', 'regex:/^\\d+$/'],
         ]);
 
         $payoutMethod = CreatorPayoutMethod::forUser($user->id)->findOrFail($validated['payout_method_id']);
@@ -63,7 +63,8 @@ class CreatorWithdrawalController extends CreatorBaseController
             $withdrawal = $this->withdrawalService->requestWithdrawal(
                 $user,
                 $payoutMethod,
-                (float) $validated['amount']
+                (string) $validated['amount'],
+                $request->header('Idempotency-Key')
             );
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
@@ -82,7 +83,7 @@ class CreatorWithdrawalController extends CreatorBaseController
     public function destroy(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        if (!$user->isCreator() && !$user->isAdmin()) {
+        if (! $this->creatorAccessAllowed($user)) {
             return $this->notCreator();
         }
 
@@ -112,12 +113,15 @@ class CreatorWithdrawalController extends CreatorBaseController
         return [
             'id' => $w->id,
             'amount' => (float) $w->amount,
+            'amount_minor' => (int) ($w->amount_minor ?? $w->amount),
+            'currency' => $w->currency ?? 'UGX',
             'status' => $w->status,
             'reference' => $w->reference,
             'method_display' => $methodDisplay,
             'requested_at' => $w->requested_at?->toIso8601String(),
             'processed_at' => $w->processed_at?->toIso8601String(),
             'failure_reason' => $w->failure_reason,
+            'provider_status' => $w->provider_status,
         ];
     }
 }

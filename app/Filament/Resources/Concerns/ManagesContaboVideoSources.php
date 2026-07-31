@@ -5,6 +5,9 @@ namespace App\Filament\Resources\Concerns;
 use App\Jobs\FetchVideoFromUrlJob;
 use App\Models\VideoSource;
 use App\Services\ContaboObjectStorageService;
+use App\Services\MediaSourceSelectionService;
+use App\Services\NbxVideoSourceService;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 trait ManagesContaboVideoSources
@@ -106,20 +109,33 @@ trait ManagesContaboVideoSources
             'file_path' => $publicUrl,
             'quality' => (string) ($data['quality'] ?? $record?->quality ?? 'auto'),
             'format' => strtolower($resolvedFormat),
+            'media_role' => strtolower($resolvedFormat) === 'm3u8' ? 'hls_master' : 'playback_progressive',
+            'server_key' => 'contabo',
+            'source_group' => 'contabo:'.$owner::class.':'.$owner->id,
+            'quality_label' => strtolower($resolvedFormat) === 'm3u8' ? 'auto' : (string) ($data['quality'] ?? $record?->quality ?? 'auto'),
             'file_size' => $fileSize ?: $record?->file_size,
             'duration_seconds' => $data['duration_seconds'] ?? $record?->duration_seconds,
             'is_primary' => (bool) ($data['is_primary'] ?? $record?->is_primary ?? false),
             'is_active' => (bool) ($data['is_active'] ?? true),
+            'storage_disk' => $service->diskName(),
+            'storage_bucket' => $service->bucket(),
+            'storage_object_key' => $objectKey,
             'metadata' => $metadata,
         ];
 
         if ($record) {
             $record->update($payload);
 
-            return $this->syncPlaybackReadiness($record->fresh());
+            $source = $this->syncPlaybackReadiness($record->fresh());
+            $this->registerContaboSourceWithNbx($source);
+
+            return $source;
         }
 
-        return $this->syncPlaybackReadiness($owner->videoSources()->create($payload));
+        $source = $this->syncPlaybackReadiness($owner->videoSources()->create($payload));
+        $this->registerContaboSourceWithNbx($source);
+
+        return $source;
     }
 
     private function queueContaboRemoteFetch(
@@ -207,6 +223,30 @@ trait ManagesContaboVideoSources
             return Storage::disk($service->diskName())->size($key);
         } catch (\Throwable) {
             return null;
+        }
+    }
+
+    private function registerContaboSourceWithNbx(VideoSource $source): void
+    {
+        app(MediaSourceSelectionService::class)->hydrateIdentity($source);
+
+        if (! (bool) config('services.nbx_engine.enabled', false) || ! $source->storage_object_key) {
+            return;
+        }
+
+        try {
+            app(NbxVideoSourceService::class)->registerDirectStorageSource($source->fresh());
+        } catch (\Throwable $exception) {
+            $metadata = array_merge((array) ($source->metadata ?? []), [
+                'nbx_storage_registration_error' => $exception->getMessage(),
+                'nbx_storage_registration_failed_at' => now()->toIso8601String(),
+            ]);
+            VideoSource::withoutEvents(fn () => $source->forceFill(['metadata' => $metadata])->save());
+            Log::warning('Direct Contabo source registration with NBX failed', [
+                'video_source_id' => $source->id,
+                'object_key' => $source->storage_object_key,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 }

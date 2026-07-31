@@ -60,6 +60,28 @@ class TVShow extends Model
         'media_library_id',
         'cdn_asset_id',
         'publish_status',
+        'submitted_by',
+        'creator_application_id',
+        'submission_origin',
+        'processing_status',
+        'editorial_status',
+        'publication_status',
+        'monetization_status',
+        'submitted_for_review_at',
+        'approved_by',
+        'approved_at',
+        'published_by',
+        'published_at',
+        'scheduled_for',
+        'moderation_notes',
+        'short_description',
+        'director',
+        'translation_language',
+        'trailer_url',
+        'tags',
+        'seo_title',
+        'seo_description',
+        'ownership_declaration_accepted_at',
     ];
 
     protected function casts(): array
@@ -82,6 +104,12 @@ class TVShow extends Model
             'networks' => 'array',
             'production_companies' => 'array',
             'production_countries' => 'array',
+            'submitted_for_review_at' => 'datetime',
+            'approved_at' => 'datetime',
+            'published_at' => 'datetime',
+            'scheduled_for' => 'datetime',
+            'tags' => 'array',
+            'ownership_declaration_accepted_at' => 'datetime',
         ];
     }
 
@@ -125,6 +153,31 @@ class TVShow extends Model
     public function mediaLibrary(): BelongsTo
     {
         return $this->belongsTo(MediaLibrary::class);
+    }
+
+    public function submittingUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    public function creatorApplication(): BelongsTo
+    {
+        return $this->belongsTo(CreatorApplication::class);
+    }
+
+    public function creatorSubmissions(): MorphMany
+    {
+        return $this->morphMany(CreatorContentSubmission::class, 'content');
+    }
+
+    public function creatorReviews(): MorphMany
+    {
+        return $this->morphMany(CreatorContentReview::class, 'content');
+    }
+
+    public function monetizationSetting()
+    {
+        return $this->morphOne(CreatorMonetizationSetting::class, 'content');
     }
 
     public function genres(): BelongsToMany

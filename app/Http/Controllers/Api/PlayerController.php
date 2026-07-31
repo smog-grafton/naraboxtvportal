@@ -3,16 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Movie;
-use App\Models\TVShow;
 use App\Models\Episode;
+use App\Models\Movie;
 use App\Models\PlaybackSession;
 use App\Models\PlayerPreference;
+use App\Models\TVShow;
 use App\Models\WatchHistory;
 use App\Services\BunnyStreamClientService;
 use App\Services\CdnMediaClientService;
 use App\Services\CdnPlaybackReadinessService;
-use App\Services\PendingPaymentResolverService;
+use App\Services\MediaAccessService;
+use App\Services\MediaSourceSelectionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -25,9 +26,8 @@ use Illuminate\Support\Facades\Log;
 class PlayerController extends Controller
 {
     public function __construct(
-        private readonly PendingPaymentResolverService $pendingPaymentResolver,
-    ) {
-    }
+        private readonly MediaAccessService $mediaAccess,
+    ) {}
 
     private function restrictedPayload(): array
     {
@@ -66,6 +66,7 @@ class PlayerController extends Controller
      * - `playback`: normalized playback manifest (`type`, `url`, `hls_master_url`, `mp4_play_url`, `qualities`, etc.)
      *
      * @urlParam id string required The movie or TV show identifier (numeric `id` or `slug`). Example: 1
+     *
      * @queryParam media_type string MOVIE or TV_SHOW. Defaults to MOVIE. Example: MOVIE
      * @queryParam episode integer The `id` of the episode when `media_type` is TV_SHOW. Example: 419
      *
@@ -158,7 +159,6 @@ class PlayerController extends Controller
      *    ]
      *  }
      * }
-     *
      * @response 403 {
      *  "error": "This content requires a premium subscription. Subscribe to access premium content.",
      *  "message": "This content requires a premium subscription. Subscribe to access premium content.",
@@ -177,7 +177,6 @@ class PlayerController extends Controller
      *  "pending_payment": false,
      *  "transaction_ref": null
      * }
-     *
      * @response 404 {
      *  "error": "Media not found"
      * }
@@ -185,13 +184,16 @@ class PlayerController extends Controller
     public function show($id, Request $request, CdnMediaClientService $cdnMediaClientService)
     {
         $episodeId = $request->get('episode');
-        $mediaType = $request->get('media_type', 'MOVIE'); // Get media_type from request, default to MOVIE
-        
+        $mediaType = strtoupper(str_replace('-', '_', (string) $request->get('media_type', 'MOVIE')));
+        if (in_array($mediaType, ['SERIES', 'TVSHOW'], true)) {
+            $mediaType = 'TV_SHOW';
+        }
+
         // Support both slug and ID (backward compatibility)
         $movie = null;
         $tvShow = null;
         $isTVShow = false;
-        
+
         // Use media_type to determine which model to query first
         if ($mediaType === 'TV_SHOW') {
             // Try TVShow first if media_type is TV_SHOW
@@ -199,10 +201,10 @@ class PlayerController extends Controller
                 ->with(['genres', 'vj', 'category'])
                 ->where(function ($query) use ($id) {
                     $query->where('id', $id)
-                          ->orWhere('slug', $id);
+                        ->orWhere('slug', $id);
                 })
                 ->first();
-            
+
             if ($tvShow) {
                 if (($tvShow->content_status ?? 'published') === 'dmca_removed') {
                     return response()->json($this->restrictedPayload(), 403);
@@ -229,24 +231,52 @@ class PlayerController extends Controller
                 ->with(['genres', 'vj', 'category'])
                 ->where(function ($query) use ($id) {
                     $query->where('id', $id)
-                          ->orWhere('slug', $id);
+                        ->orWhere('slug', $id);
                 })
                 ->first();
+
+            // Older clients converted a SERIES hero row to MOVIE. A legacy
+            // series mirror can share the slug but not the canonical TVShow id;
+            // switch to the real TV show before source and episode selection.
+            if ($movie && strtoupper((string) $movie->media_type) === 'SERIES') {
+                $canonicalTvShow = TVShow::where('is_active', true)
+                    ->with(['genres', 'vj', 'category'])
+                    ->where('slug', $movie->slug)
+                    ->first();
+
+                if ($canonicalTvShow) {
+                    $tvShow = $canonicalTvShow;
+                    $isTVShow = true;
+                    $movie = (object) [
+                        'id' => $tvShow->id,
+                        'title' => $tvShow->title,
+                        'thumbnail' => $tvShow->thumbnail,
+                        'backdrop' => $tvShow->backdrop,
+                        'is_free' => $tvShow->is_free,
+                        'is_premium' => $tvShow->is_premium,
+                        'price_rent' => $tvShow->price_rent,
+                        'price_buy' => $tvShow->price_buy,
+                        'download_enabled' => $tvShow->download_enabled,
+                        'duration' => $tvShow->duration,
+                        'video_url' => null,
+                    ];
+                }
+            }
 
             if ($movie && (($movie->content_status ?? 'published') === 'dmca_removed')) {
                 return response()->json($this->restrictedPayload(), 403);
             }
         }
-        
+
         // If not found, try the other type (fallback for backward compatibility)
-        if (!$movie && !$tvShow) {
+        if (! $movie && ! $tvShow) {
             if ($mediaType === 'TV_SHOW') {
                 // Try Movie as fallback
                 $movie = Movie::where('is_active', true)
                     ->with(['genres', 'vj', 'category'])
                     ->where(function ($query) use ($id) {
                         $query->where('id', $id)
-                              ->orWhere('slug', $id);
+                            ->orWhere('slug', $id);
                     })
                     ->first();
 
@@ -259,10 +289,10 @@ class PlayerController extends Controller
                     ->with(['genres', 'vj', 'category'])
                     ->where(function ($query) use ($id) {
                         $query->where('id', $id)
-                              ->orWhere('slug', $id);
+                            ->orWhere('slug', $id);
                     })
                     ->first();
-                
+
                 if ($tvShow) {
                     if (($tvShow->content_status ?? 'published') === 'dmca_removed') {
                         return response()->json($this->restrictedPayload(), 403);
@@ -285,9 +315,9 @@ class PlayerController extends Controller
                 }
             }
         }
-        
+
         // If still not found, return error
-        if (!$movie && !$tvShow) {
+        if (! $movie && ! $tvShow) {
             return response()->json(['error' => 'Media not found'], 404);
         }
 
@@ -316,7 +346,7 @@ class PlayerController extends Controller
         if (! $episode && $isTVShow) {
             $episode = $this->resolveTvShowEpisode($tvShow, $user);
         }
-        
+
         // Debug: Log user authentication status
         if ($isTVShow && $tvShow->is_premium) {
             Log::info('PlayerController access check', [
@@ -329,12 +359,12 @@ class PlayerController extends Controller
                 'authenticated' => $user !== null,
             ]);
         }
-        
+
         // Check if content is free first (before access check)
         $isFree = $isTVShow ? $tvShow->is_free : $movie->is_free;
-        
+
         $accessInfo = $this->checkAccessDetailed($movie, $user, $isTVShow ? $tvShow : null);
-        
+
         // Debug: Log access result
         if ($isTVShow && $tvShow->is_premium && $user) {
             Log::info('PlayerController subscription check result', [
@@ -349,25 +379,26 @@ class PlayerController extends Controller
 
         // For free content, allow access even if user is not authenticated
         // But still check access for other content types
-        if (!$isFree && !$accessInfo['has_access']) {
+        if (! $isFree && ! $accessInfo['has_access']) {
             return response()->json([
+                'code' => $accessInfo['code'] ?? 'ACCESS_DENIED',
                 'error' => $accessInfo['reason'] ?? 'Access denied',
                 'message' => $accessInfo['reason'] ?? 'Access denied',
                 'has_access' => false,
                 'reason' => $accessInfo['reason'] ?? 'Access denied',
-                'requires_payment' => !($isTVShow ? $tvShow->is_free : $movie->is_free) && !($isTVShow ? $tvShow->is_premium : $movie->is_premium),
+                'requires_payment' => ! ($isTVShow ? $tvShow->is_free : $movie->is_free) && ! ($isTVShow ? $tvShow->is_premium : $movie->is_premium),
                 'requires_subscription' => $isTVShow ? $tvShow->is_premium : $movie->is_premium,
-                'requires_auth' => !$user,
+                'requires_auth' => ! $user,
                 'access_type' => $accessInfo['access_type'] ?? null,
-                'can_rent' => !empty($isTVShow ? $tvShow->price_rent : $movie->price_rent),
-                'can_buy' => !empty($isTVShow ? $tvShow->price_buy : $movie->price_buy),
+                'can_rent' => ! empty($isTVShow ? $tvShow->price_rent : $movie->price_rent),
+                'can_buy' => ! empty($isTVShow ? $tvShow->price_buy : $movie->price_buy),
                 'rent_price' => $isTVShow ? $tvShow->price_rent : $movie->price_rent,
                 'buy_price' => $isTVShow ? $tvShow->price_buy : $movie->price_buy,
                 'is_free' => $isTVShow ? $tvShow->is_free : $movie->is_free,
                 'is_premium' => $isTVShow ? $tvShow->is_premium : $movie->is_premium,
                 'pending_payment' => $accessInfo['pending_payment'] ?? false,
                 'transaction_ref' => $accessInfo['transaction_ref'] ?? null,
-            ], 403);
+            ], (int) ($accessInfo['http_status'] ?? 403));
         }
 
         // Get all active video sources for quality switching
@@ -386,52 +417,27 @@ class PlayerController extends Controller
             }
         }
 
-        $allVideoSourceModels = $sourceable->videoSources()
-            ->orderBy('is_primary', 'desc')
-            ->orderBy('quality', 'desc')
-            ->get();
-        $activeVideoSourceModels = $allVideoSourceModels
-            ->filter(fn ($source): bool => $this->canUseVideoSourceModel($source, false))
-            ->values();
-        $fallbackVideoSourceModels = $allVideoSourceModels
-            ->filter(fn ($source): bool => $this->canUseVideoSourceModel($source, true))
-            ->values();
-
-        $videoSourceModels = $activeVideoSourceModels->isNotEmpty()
-            ? $activeVideoSourceModels
-            : $fallbackVideoSourceModels;
-
-        if ($activeVideoSourceModels->isEmpty() && $fallbackVideoSourceModels->isNotEmpty()) {
-            $this->reactivateSafeFallbackSources($fallbackVideoSourceModels);
-        }
-
+        $preferBrowserSafePlayback = $this->shouldPreferBrowserSafePlayback($request);
+        $selection = app(MediaSourceSelectionService::class);
+        $videoSourceModels = $selection->candidatesFor($sourceable, $preferBrowserSafePlayback ? 'web' : null);
         $allow720p = $this->canStream720p($user);
 
         $videoSources = $videoSourceModels
-            ->map(function ($source) {
-                return [
-                    'id' => $source->id,
-                    'url' => $this->usableVideoSourceUrl($source),
-                    'quality' => $source->quality ?? 'auto',
-                    'format' => $source->format ?? 'mp4',
-                    'type' => in_array($source->type, ['contabo_object_storage', 'tele_ob'], true) ? 'url' : $source->type,
-                    'isPrimary' => $source->is_primary,
-                    'duration' => $source->duration_seconds, // Include duration if available
-                ];
-            })
+            ->map(fn ($source, int $index): array => $selection->toCandidate($source, $index === 0))
             ->filter(fn (array $source): bool => is_string($source['url'] ?? null) && trim((string) $source['url']) !== '')
             ->filter(fn (array $source): bool => $this->isAllowedPlaybackQuality($source, $allow720p))
-            ->sortBy(fn (array $source): int => $this->playbackSourceSortScore($source))
             ->values();
-        $preferBrowserSafePlayback = $this->shouldPreferBrowserSafePlayback($request);
-        
+
         // Helper to get full URL for images (define early so it can be used)
         $getImageUrl = function ($path) {
-            if (empty($path)) return null;
+            if (empty($path)) {
+                return null;
+            }
             if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
                 return $path;
             }
-            return asset('storage/' . $path);
+
+            return asset('storage/'.$path);
         };
 
         // Get all active subtitles
@@ -451,29 +457,30 @@ class PlayerController extends Controller
                     'format' => $subtitle->format,
                 ];
             });
-        
+
         // Get primary video source or first available
         $primarySource = $this->selectPreferredVideoSource($videoSources->values()->toArray(), $preferBrowserSafePlayback);
         if (is_array($primarySource) && isset($primarySource['url'])) {
             $selectedSourceUrl = (string) $primarySource['url'];
             $videoSources = $videoSources->map(function (array $source) use ($selectedSourceUrl) {
                 $source['isPrimary'] = (($source['url'] ?? null) === $selectedSourceUrl);
+
                 return $source;
             });
         }
         $videoUrl = $primarySource['url'] ?? null;
-        
+
         // Fallback to video_url field if no video sources
         if (empty($videoUrl)) {
             if ($episode) {
-                $videoUrl = $episode->video_url;
+                $videoUrl = $this->directlyPlayableOriginalUrl($episode->video_url);
             } elseif ($isTVShow) {
                 $videoUrl = null; // TV shows don't have direct video_url
             } else {
-                $videoUrl = $movie->video_url;
+                $videoUrl = $this->directlyPlayableOriginalUrl($movie->video_url);
             }
         }
-        
+
         // No default video - return error if no source available
         if (empty($videoUrl)) {
             return response()->json([
@@ -486,12 +493,12 @@ class PlayerController extends Controller
         // For free content, always include download sources
         // For other content, only include if user has access
         $downloadSources = collect();
-        $downloadEnabled = ($episode && $episode->download_enabled) || (!$episode && $movie->download_enabled);
-        
+        $downloadEnabled = ($episode && $episode->download_enabled) || (! $episode && $movie->download_enabled);
+
         if ($downloadEnabled && ($isFree || $accessInfo['has_access'])) {
             $this->syncPlayableSourcesToDownloads($videoSourceModels);
 
-            $apiUrl = config('app.url') . '/api/v1';
+            $apiUrl = config('app.url').'/api/v1';
             $downloadSources = $sourceable->downloadSources()
                 ->where('is_active', true)
                 ->where(function ($query): void {
@@ -513,9 +520,9 @@ class PlayerController extends Controller
                         'type' => in_array($source->type, ['contabo_object_storage', 'tele_ob'], true) ? 'url' : $source->type,
                         'quality' => $source->quality,
                         'format' => $source->format,
-                        'label' => $source->label ?: ($source->quality . ' ' . strtoupper($source->format)),
-                        'url' => $apiUrl . '/downloads/' . $source->id, // Use download endpoint
-                        'download_url' => $apiUrl . '/downloads/' . $source->id,
+                        'label' => $source->label ?: ($source->quality.' '.strtoupper($source->format)),
+                        'url' => $apiUrl.'/downloads/'.$source->id, // Use download endpoint
+                        'download_url' => $apiUrl.'/downloads/'.$source->id,
                         'file_size' => $source->file_size,
                         'source_url' => $source->url, // Include original URL for URL type sources
                         'file_path' => $source->file_path, // Include file path for local sources
@@ -525,10 +532,10 @@ class PlayerController extends Controller
 
         // Get video duration from primary source or movie/episode duration
         $duration = $primarySource['duration'] ?? null;
-        if (!$duration && $episode && $episode->duration) {
+        if (! $duration && $episode && $episode->duration) {
             // Parse episode duration (e.g., "45m" -> 2700 seconds)
             $duration = $this->parseDuration($episode->duration);
-        } elseif (!$duration) {
+        } elseif (! $duration) {
             $mediaDuration = $isTVShow ? ($tvShow->duration ?? null) : ($movie->duration ?? null);
             if ($mediaDuration) {
                 $duration = $this->parseDuration($mediaDuration);
@@ -552,9 +559,48 @@ class PlayerController extends Controller
                 $videoUrl = $playback['url'];
             }
             if (isset($playback['sources']) && is_array($playback['sources']) && $playback['sources'] !== []) {
-                $videoSources = collect($playback['sources']);
+                // The policy candidates remain authoritative. HLS renditions belong
+                // in `qualities`, not in the server/source failover list.
+                $playback['sources'] = $videoSources->values()->toArray();
             }
         }
+
+        $sourceCandidates = $videoSources->values()->toArray();
+        $preferredSource = $sourceCandidates[0] ?? null;
+        if ($preferredSource) {
+            $videoUrl = $preferredSource['url'];
+            $preferredIsHls = ($preferredSource['role'] ?? null) === 'hls_master'
+                || in_array(strtolower((string) ($preferredSource['format'] ?? '')), ['hls', 'm3u8'], true);
+            $healthyHls = collect($sourceCandidates)->first(fn (array $source): bool => (($source['role'] ?? null) === 'hls_master')
+                && ($source['health_status'] ?? null) === 'healthy'
+            );
+            $mp4Fallback = collect($sourceCandidates)->first(fn (array $source): bool => in_array(strtolower((string) ($source['format'] ?? '')), ['mp4', 'm4v'], true)
+            );
+
+            $playback = array_merge(is_array($playback) ? $playback : [], [
+                'type' => $preferredIsHls ? 'hls' : 'mp4',
+                'url' => $videoUrl,
+                'hls_master_url' => $healthyHls['url'] ?? null,
+                'mp4_play_url' => $mp4Fallback['url'] ?? null,
+                'mp4_url' => $mp4Fallback['url'] ?? null,
+                'sources' => $sourceCandidates,
+            ]);
+        }
+        $availableQualities = collect($sourceCandidates)
+            ->map(function (array $source): array {
+                $quality = ($source['role'] ?? null) === 'hls_master'
+                    ? 'auto'
+                    : strtolower((string) ($source['quality'] ?? 'auto'));
+
+                return [
+                    'label' => $quality === 'auto' ? 'Auto' : strtoupper($quality),
+                    'source_id' => $source['id'] ?? null,
+                    'quality' => $quality,
+                ];
+            })
+            ->unique('quality')
+            ->values()
+            ->toArray();
 
         Log::info('Player playback response prepared', [
             'media_id' => $isTVShow ? $tvShow->id : $movie->id,
@@ -608,6 +654,9 @@ class PlayerController extends Controller
             ] : null,
             'videoUrl' => $videoUrl,
             'videoSources' => $videoSources->values()->toArray(), // All available sources for quality switching
+            'preferred_source' => $preferredSource,
+            'source_candidates' => $sourceCandidates,
+            'available_qualities' => $availableQualities,
             'subtitles' => $subtitles->values()->toArray(), // All available subtitles
             'duration' => $duration, // Duration in seconds
             'poster' => $getImageUrl($isTVShow ? $tvShow->backdrop : $movie->backdrop) ?? $getImageUrl($isTVShow ? $tvShow->thumbnail : $movie->thumbnail), // Use backdrop as poster, fallback to thumbnail
@@ -637,7 +686,6 @@ class PlayerController extends Controller
      * @response 200 {
      *  "success": true
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -645,7 +693,7 @@ class PlayerController extends Controller
     public function updateHistory(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -719,7 +767,6 @@ class PlayerController extends Controller
      *    }
      *  ]
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -727,7 +774,7 @@ class PlayerController extends Controller
     public function getHistory(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -989,176 +1036,7 @@ class PlayerController extends Controller
 
     private function checkAccessDetailed($movie, $user, ?TVShow $tvShow = null): array
     {
-        // Check if content is free
-        $isFree = $tvShow ? $tvShow->is_free : $movie->is_free;
-        
-        $isPremium = $tvShow ? $tvShow->is_premium : $movie->is_premium;
-        $priceRent = $tvShow ? $tvShow->price_rent : $movie->price_rent;
-        $priceBuy = $tvShow ? $tvShow->price_buy : $movie->price_buy;
-        
-        // Check if content is free
-        if ($isFree) {
-            return [
-                'has_access' => true,
-                'access_type' => 'FREE',
-                'reason' => 'Content is free',
-            ];
-        }
-
-        // If no user, check if content requires authentication
-        if (!$user) {
-            return [
-                'has_access' => false,
-                'access_type' => null,
-                'reason' => 'Please log in to access this content',
-                'requires_auth' => true,
-            ];
-        }
-
-        // PRIORITY 1: Purchased access should still unlock premium titles after subscriptions expire.
-        $purchaseType = $tvShow ? TVShow::class : Movie::class;
-        $purchase = \App\Models\UserPurchase::where('user_id', $user->id)
-            ->where('purchasable_type', $purchaseType)
-            ->where('purchasable_id', $movie->id)
-            ->first();
-
-        if ($purchase) {
-            return [
-                'has_access' => true,
-                'access_type' => 'PURCHASED',
-                'reason' => 'You own this content',
-            ];
-        }
-
-        // PRIORITY 2: Active rentals should also outlive subscription expiry.
-        $rentalType = $tvShow ? TVShow::class : Movie::class;
-        $rental = \App\Models\UserRental::where('user_id', $user->id)
-            ->where('rentable_type', $rentalType)
-            ->where('rentable_id', $movie->id)
-            ->where('is_active', true)
-            ->where('expires_at', '>', now())
-            ->first();
-
-        if ($rental) {
-            return [
-                'has_access' => true,
-                'access_type' => 'RENTED',
-                'reason' => 'You have rented this content',
-                'expires_at' => $rental->expires_at,
-            ];
-        }
-
-        // PRIORITY 3: Pending rent/buy access for this title comes before subscription prompts.
-        $transactionType = $tvShow ? TVShow::class : Movie::class;
-        $pendingTransaction = $this->pendingPaymentResolver->getPendingContentTransaction(
-            $user->id,
-            $transactionType,
-            $movie->id,
-        );
-
-        if ($pendingTransaction) {
-            $isManualReview = $pendingTransaction->paymentGateway?->type === 'MANUAL';
-            return [
-                'has_access' => false,
-                'access_type' => 'PENDING',
-                'reason' => $isManualReview
-                    ? 'Your payment is pending admin approval. Access will be granted once approved.'
-                    : 'We are still confirming your payment. Access unlocks automatically once the gateway responds.',
-                'pending_payment' => true,
-                'transaction_ref' => $pendingTransaction->transaction_ref,
-            ];
-        }
-
-        // PRIORITY 4: Active subscriptions unlock premium titles when no purchase/rental exists.
-        if ($isPremium) {
-            $allSubscriptions = \App\Models\UserSubscription::where('user_id', $user->id)->get();
-
-            $activeSubscription = \App\Models\UserSubscription::where('user_id', $user->id)
-                ->where('status', 'ACTIVE')
-                ->where('expires_at', '>', now())
-                ->first();
-
-            Log::info('Subscription check for premium content', [
-                'user_id' => $user->id,
-                'user_email' => $user->email,
-                'is_premium' => $isPremium,
-                'total_subscriptions' => $allSubscriptions->count(),
-                'subscriptions' => $allSubscriptions->map(fn($s) => [
-                    'id' => $s->id,
-                    'status' => $s->status,
-                    'expires_at' => $s->expires_at,
-                    'is_expired' => $s->expires_at <= now(),
-                ])->toArray(),
-                'active_subscription_found' => $activeSubscription !== null,
-                'active_subscription_id' => $activeSubscription ? $activeSubscription->id : null,
-                'now' => now()->toDateTimeString(),
-            ]);
-
-            if ($activeSubscription) {
-                return [
-                    'has_access' => true,
-                    'access_type' => 'SUBSCRIPTION',
-                    'reason' => 'You have an active subscription',
-                ];
-            }
-
-            $pendingSubscription = $this->pendingPaymentResolver->getPendingSubscriptionTransaction($user->id);
-
-            if ($pendingSubscription) {
-                $isManualReview = $pendingSubscription->paymentGateway?->type === 'MANUAL';
-
-                return [
-                    'has_access' => false,
-                    'access_type' => 'PENDING',
-                    'reason' => $isManualReview
-                        ? 'Your subscription payment is pending admin approval. Access will be granted once approved.'
-                        : 'We are still confirming your subscription payment. Access unlocks automatically once the gateway responds.',
-                    'pending_payment' => true,
-                    'transaction_ref' => $pendingSubscription->transaction_ref,
-                    'requires_subscription' => true,
-                ];
-            }
-
-            return [
-                'has_access' => false,
-                'access_type' => 'PREMIUM',
-                'reason' => 'This content requires a premium subscription. Subscribe to access premium content.',
-                'requires_subscription' => true,
-                'can_rent' => !empty($priceRent),
-                'can_buy' => !empty($priceBuy),
-                'rent_price' => $priceRent,
-                'buy_price' => $priceBuy,
-            ];
-        }
-
-        // Content is not free, not premium, check if rent/buy available
-        if (!empty($priceRent) || !empty($priceBuy)) {
-            $options = [];
-            if (!empty($priceRent)) $options[] = 'rent';
-            if (!empty($priceBuy)) $options[] = 'buy';
-            
-            $reason = 'This content requires payment. ';
-            if (count($options) === 2) {
-                $reason .= 'You can rent it for UGX ' . number_format($priceRent, 0) . ' or buy it for lifetime access.';
-            } elseif (!empty($priceRent)) {
-                $reason .= 'You can rent it for UGX ' . number_format($priceRent, 0) . ' (30 days access).';
-            } else {
-                $reason .= 'You can buy it for lifetime access.';
-            }
-            
-            return [
-                'has_access' => false,
-                'access_type' => 'PAID',
-                'reason' => $reason,
-                'requires_payment' => true,
-            ];
-        }
-
-        return [
-            'has_access' => false,
-            'access_type' => 'UNKNOWN',
-            'reason' => 'Access denied. Please contact support.',
-        ];
+        return $this->mediaAccess->evaluate($tvShow ?? $movie, $user);
     }
 
     /**
@@ -1172,31 +1050,53 @@ class PlayerController extends Controller
         }
 
         $seconds = 0;
-        
+
         // Match hours
         if (preg_match('/(\d+)\s*h/i', $duration, $matches)) {
-            $seconds += (int)$matches[1] * 3600;
+            $seconds += (int) $matches[1] * 3600;
         }
-        
+
         // Match minutes
         if (preg_match('/(\d+)\s*m/i', $duration, $matches)) {
-            $seconds += (int)$matches[1] * 60;
+            $seconds += (int) $matches[1] * 60;
         }
-        
+
         // Match seconds
         if (preg_match('/(\d+)\s*s/i', $duration, $matches)) {
-            $seconds += (int)$matches[1];
+            $seconds += (int) $matches[1];
         }
-        
+
         return $seconds > 0 ? $seconds : null;
     }
 
-
     private function canUseVideoSourceModel($source, bool $allowInactiveFallback): bool
     {
+        $metadata = is_array($source->metadata ?? null) ? (array) $source->metadata : [];
+        $status = strtolower((string) (
+            $metadata['fetch_status']
+            ?? $metadata['processing_config']['last_status']
+            ?? $metadata['nbx']['status']
+            ?? ''
+        ));
+        if (in_array($status, ['failed', 'destroyed', 'cancelled', 'canceled'], true)) {
+            return false;
+        }
+
         $url = $this->usableVideoSourceUrl($source);
         if (! is_string($url) || trim($url) === '') {
             return false;
+        }
+
+        if (in_array($source->type, ['nbx-engine', 'tele_ob'], true) && ! empty($metadata['outputs'])) {
+            $verified = collect($metadata['outputs'])->contains(function (mixed $output) use ($url): bool {
+                return is_array($output)
+                    && in_array($output['role'] ?? null, ['playback_progressive', 'hls_master'], true)
+                    && (bool) ($output['verified'] ?? false)
+                    && trim((string) ($output['url'] ?? '')) === trim($url);
+            });
+            if (! $verified) {
+                return false;
+            }
         }
 
         if ((bool) $source->is_active) {
@@ -1207,7 +1107,6 @@ class PlayerController extends Controller
             return false;
         }
 
-        $metadata = is_array($source->metadata ?? null) ? (array) $source->metadata : [];
         if ($this->isHlsVideoSourceModel($source)) {
             return (bool) ($metadata['cdn_ready'] ?? $metadata['cdn_hls_ready'] ?? false);
         }
@@ -1235,21 +1134,38 @@ class PlayerController extends Controller
         }
 
         $metadata = is_array($source->metadata ?? null) ? (array) $source->metadata : [];
+        $isNbxManaged = in_array($source->type, ['nbx-engine', 'tele_ob'], true)
+            || ($metadata['provider'] ?? null) === 'nbx_engine';
 
-        foreach ([
+        $candidates = [
+            $metadata['hls_master_url'] ?? null,
+            $metadata['hls_url'] ?? null,
             $metadata['mp4_play_url'] ?? null,
             $metadata['mp4_url'] ?? null,
             $metadata['download_mp4_url'] ?? null,
             $metadata['download_url'] ?? null,
-            $metadata['original_url'] ?? null,
-            $metadata['public_url'] ?? null,
-            $source->full_url ?? null,
-            $source->url ?? null,
-            $source->file_path ?? null,
-            $metadata['hls_master_url'] ?? null,
-            $metadata['hls_url'] ?? null,
-        ] as $candidate) {
+        ];
+        if (! $isNbxManaged) {
+            array_push($candidates,
+                $metadata['original_url'] ?? null,
+                $metadata['public_url'] ?? null,
+                $source->full_url ?? null,
+                $source->url ?? null,
+                $source->file_path ?? null,
+            );
+        } else {
+            array_push($candidates, $source->url ?? null, $source->file_path ?? null);
+        }
+
+        foreach ($candidates as $candidate) {
             $url = trim((string) $candidate);
+
+            if ($isNbxManaged && $url !== '') {
+                $path = strtolower((string) parse_url($url, PHP_URL_PATH));
+                if (! str_ends_with($path, '.mp4') && ! str_ends_with($path, '.m3u8')) {
+                    continue;
+                }
+            }
 
             if ($url !== '') {
                 return $url;
@@ -1259,10 +1175,37 @@ class PlayerController extends Controller
         return null;
     }
 
+    private function directlyPlayableOriginalUrl(mixed $url): ?string
+    {
+        if (! is_string($url) || trim($url) === '') {
+            return null;
+        }
+
+        $url = trim($url);
+        if (preg_match('~^https?://~i', $url) !== 1) {
+            return null;
+        }
+
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($host === 't.me' || str_ends_with($host, '.t.me') || str_contains($host, 'telegram.')) {
+            return null;
+        }
+
+        return preg_match('/\.(m3u8|mp4|m4v|webm|mkv|mov)(?:$|[?#])/i', $url) === 1
+            ? $url
+            : null;
+    }
+
     private function reactivateSafeFallbackSources(\Illuminate\Support\Collection $sources): void
     {
         foreach ($sources as $source) {
-            if ((bool) $source->is_active || $this->isHlsVideoSourceModel($source)) {
+            $metadata = (array) ($source->metadata ?? []);
+            $status = strtolower((string) ($metadata['fetch_status'] ?? $metadata['nbx']['status'] ?? ''));
+            if ((bool) $source->is_active
+                || $this->isHlsVideoSourceModel($source)
+                || in_array($source->type, ['nbx-engine', 'tele_ob'], true)
+                || ($metadata['provider'] ?? null) === 'nbx_engine'
+                || in_array($status, ['failed', 'destroyed', 'cancelled', 'canceled'], true)) {
                 continue;
             }
 
@@ -1401,7 +1344,7 @@ class PlayerController extends Controller
                     continue;
                 }
                 $sources[] = [
-                    'id' => 'nbx-' . (string) ($quality['id'] ?? 'quality'),
+                    'id' => 'nbx-'.(string) ($quality['id'] ?? 'quality'),
                     'url' => (string) $quality['url'],
                     'quality' => strtolower((string) ($quality['id'] ?? $quality['label'] ?? 'auto')),
                     'format' => 'hls',
@@ -1517,7 +1460,7 @@ class PlayerController extends Controller
                 ];
 
                 $mappedSources[] = [
-                    'id' => 'cdn-' . $qualityId,
+                    'id' => 'cdn-'.$qualityId,
                     'url' => $qualityUrl,
                     'quality' => strtolower($qualityId),
                     'format' => $type === 'hls' ? 'hls' : 'mp4',
@@ -1555,6 +1498,7 @@ class PlayerController extends Controller
             if ($aPrimary === $bPrimary) {
                 return 0;
             }
+
             return $aPrimary ? -1 : 1;
         });
 
@@ -1654,7 +1598,7 @@ class PlayerController extends Controller
         }
 
         $primarySource = [
-            'id' => $source->id ?? ('bunny-' . ($videoId ?: md5($playbackUrl))),
+            'id' => $source->id ?? ('bunny-'.($videoId ?: md5($playbackUrl))),
             'url' => $playbackUrl,
             'quality' => 'auto',
             'format' => $hlsMaster ? 'hls' : 'mp4',
@@ -1790,6 +1734,7 @@ class PlayerController extends Controller
 
             if (in_array($marker->marker_type, ['intro', 'recap', 'credits'], true)) {
                 $payload[$marker->marker_type] = $range;
+
                 continue;
             }
 
@@ -2074,7 +2019,7 @@ class PlayerController extends Controller
         $quality = strtolower((string) ($source['quality'] ?? $source['label'] ?? $source['id'] ?? ''));
 
         if (str_contains($quality, '1080') || str_contains($quality, '4k')) {
-            return false;
+            return ! $this->isManagedAdaptivePlaybackSource($source);
         }
 
         if (str_contains($quality, '720')) {

@@ -22,6 +22,15 @@ class CreatorEarning extends Model
         'status',
         'available_at',
         'notes',
+        'gross_amount_minor',
+        'net_amount_minor',
+        'creator_amount_minor',
+        'platform_amount_minor',
+        'creator_share_bps',
+        'platform_share_bps',
+        'eligibility_status',
+        'calculation_snapshot',
+        'idempotency_key',
     ];
 
     protected function casts(): array
@@ -32,6 +41,7 @@ class CreatorEarning extends Model
             'platform_amount' => 'decimal:2',
             'creator_amount' => 'decimal:2',
             'available_at' => 'datetime',
+            'calculation_snapshot' => 'array',
         ];
     }
 

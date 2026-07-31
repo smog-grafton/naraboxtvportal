@@ -17,6 +17,9 @@ class CreatorTmdbController extends CreatorBaseController
      */
     public function search(Request $request): JsonResponse
     {
+        if (! $this->creatorAccessAllowed($request->user())) {
+            return $this->notCreator();
+        }
         $validated = $request->validate([
             'q'    => ['required', 'string', 'min:2', 'max:200'],
             'type' => ['nullable', 'in:movie,tv,multi'],
@@ -60,6 +63,9 @@ class CreatorTmdbController extends CreatorBaseController
      */
     public function movie(Request $request, int $tmdbId): JsonResponse
     {
+        if (! $this->creatorAccessAllowed($request->user())) {
+            return $this->notCreator();
+        }
         $raw = $this->tmdb->getMovieDetails($tmdbId);
 
         if (!$raw) {
@@ -105,6 +111,9 @@ class CreatorTmdbController extends CreatorBaseController
      */
     public function tv(Request $request, int $tmdbId): JsonResponse
     {
+        if (! $this->creatorAccessAllowed($request->user())) {
+            return $this->notCreator();
+        }
         $raw = $this->tmdb->getTvShowDetails($tmdbId);
 
         if (!$raw) {
@@ -156,6 +165,9 @@ class CreatorTmdbController extends CreatorBaseController
      */
     public function tvSeason(Request $request, int $tmdbTvId, int $seasonNumber): JsonResponse
     {
+        if (! $this->creatorAccessAllowed($request->user())) {
+            return $this->notCreator();
+        }
         $raw = $this->tmdb->getSeasonDetails($tmdbTvId, $seasonNumber);
 
         if (!$raw) {

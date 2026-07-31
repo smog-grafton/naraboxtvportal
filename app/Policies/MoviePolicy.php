@@ -7,59 +7,42 @@ use App\Models\User;
 
 class MoviePolicy
 {
+    public function before(User $user): ?bool
+    {
+        return $user->isAdmin() ? true : null;
+    }
+
     public function viewAny(User $user): bool
     {
-        return true;
+        return $user->hasCreatorWorkspace();
     }
 
     public function view(User $user, Movie $movie): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $movie);
+        return $this->owns($user, $movie);
     }
 
     public function create(User $user): bool
     {
-        return $user->isAdmin() || $user->isCreator();
+        return $user->hasCreatorWorkspace()
+            && ($user->creatorPermission?->draft_submission_enabled ?? true);
     }
 
     public function update(User $user, Movie $movie): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $movie);
+        return $this->owns($user, $movie)
+            && ! in_array($movie->publication_status, ['suspended', 'archived'], true);
     }
 
     public function delete(User $user, Movie $movie): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $movie);
+        return $this->update($user, $movie);
     }
 
-    public function manageSource(User $user, Movie $movie): bool
+    private function owns(User $user, Movie $movie): bool
     {
-        return $user->isAdmin() || $this->isOwner($user, $movie);
-    }
-
-    public function publish(User $user, Movie $movie): bool
-    {
-        return $user->isAdmin() || $this->isOwner($user, $movie);
-    }
-
-    private function isOwner(User $user, Movie $movie): bool
-    {
-        // VJ ownership via vj_id → vjs.user_id
-        if ($user->isVJ()) {
-            $vj = $user->vjProfile;
-            if ($vj && $movie->vj_id === $vj->id) {
-                return true;
-            }
-        }
-
-        // Media Library ownership via media_library_id → media_libraries.user_id
-        if ($user->isMediaLibrary()) {
-            $library = $user->mediaLibraryProfile;
-            if ($library && $movie->media_library_id === $library->id) {
-                return true;
-            }
-        }
-
-        return false;
+        return $movie->submitted_by === $user->id
+            || ($user->vjProfile && $movie->vj_id === $user->vjProfile->id)
+            || ($user->mediaLibraryProfile && $movie->media_library_id === $user->mediaLibraryProfile->id);
     }
 }

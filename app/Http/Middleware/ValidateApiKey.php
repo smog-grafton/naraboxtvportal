@@ -27,6 +27,20 @@ class ValidateApiKey
             return $next($request);
         }
 
+        // Public title pages are server-rendered and must remain discoverable
+        // when a frontend deployment has not yet received a rotated app key.
+        // These endpoints expose only the same published catalogue already
+        // visible on naraboxtv.com; playback, accounts, payments and writes stay
+        // behind their existing API-key/auth checks.
+        if ($request->isMethod('GET') && $request->is(
+            'api/v1/movies',
+            'api/v1/movies/*',
+            'api/v1/tv-shows',
+            'api/v1/tv-shows/*',
+        )) {
+            return $next($request);
+        }
+
         // If API key protection is disabled or no key is configured, allow all.
         if (! config('api.enabled')) {
             return $next($request);

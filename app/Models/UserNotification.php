@@ -15,6 +15,7 @@ class UserNotification extends Model
         'type',
         'image_url',
         'action_url',
+        'data',
         'media_type',
         'media_id',
         'is_global',
@@ -26,6 +27,7 @@ class UserNotification extends Model
         return [
             'is_global' => 'boolean',
             'read_at' => 'datetime',
+            'data' => 'array',
         ];
     }
 
