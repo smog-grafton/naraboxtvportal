@@ -52,7 +52,32 @@ use App\Http\Controllers\Api\VideoFetchController;
 use App\Http\Controllers\Api\VJController;
 use App\Http\Controllers\Api\WorkerSyncController;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+
+Route::get('/health', function () {
+    $startedAt = microtime(true);
+
+    try {
+        DB::select('SELECT 1');
+
+        return response()->json([
+            'status' => 'ok',
+            'service' => 'narabox-portal',
+            'database' => 'reachable',
+            'latency_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'checked_at' => now()->toIso8601String(),
+        ])->header('Cache-Control', 'no-store');
+    } catch (Throwable) {
+        return response()->json([
+            'status' => 'degraded',
+            'service' => 'narabox-portal',
+            'database' => 'unreachable',
+            'latency_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'checked_at' => now()->toIso8601String(),
+        ], 503)->header('Cache-Control', 'no-store');
+    }
+})->middleware('throttle:60,1');
 
 Route::post('/cdn/fetch-and-push', [CdnFetchProxyController::class, 'fetchAndPush'])
     ->middleware('throttle:20,1');
