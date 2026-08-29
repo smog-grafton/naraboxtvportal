@@ -19,6 +19,7 @@ class DownloadSource extends Model
         'label',
         'sort_order',
         'is_active',
+        'storage_target_key',
     ];
 
     protected function casts(): array

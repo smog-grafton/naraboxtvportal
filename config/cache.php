@@ -17,6 +17,10 @@ return [
 
     'default' => env('CACHE_STORE', 'database'),
 
+    // Presence is high-frequency telemetry. Use a shared store; production
+    // can set PRESENCE_CACHE_STORE=redis when Redis is available.
+    'presence_store' => env('PRESENCE_CACHE_STORE', 'database'),
+
     /*
     |--------------------------------------------------------------------------
     | Cache Stores

@@ -24,3 +24,5 @@ Homestead.yaml
 Thumbs.db
 *.zip
 graphify-out/
+docs/r2-tokens.md
+docs/r2-user-api-tokens.md

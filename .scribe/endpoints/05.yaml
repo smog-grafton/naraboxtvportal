@@ -1,0 +1,113 @@
+name: VJs
+description: |-
+
+  List and fetch VJs (translators/presenters). Filter by featured; order by rating or movies count.
+endpoints:
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/vjs
+    metadata:
+      custom: []
+      groupName: VJs
+      groupDescription: |-
+
+        List and fetch VJs (translators/presenters). Filter by featured; order by rating or movies count.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'List VJs. Query: featured (1), order_by (movies_count), limit.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"data":[{"id":1,"name":"VJ Junior","slug":"vj-junior","image":"https:\/\/images.unsplash.com\/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop","banner":"https:\/\/images.unsplash.com\/photo-1492684223066-81342ee5ff30?w=1920&h=600&fit=crop","rating":4.9,"specialty":["Action","Sci-Fi"],"bio":"The legend of Luganda translation. Over two decades of bringing global cinema to local hearts.","translatedCount":1542,"moviesCount":1},{"id":2,"name":"VJ Jingo","slug":"vj-jingo","image":"https:\/\/images.unsplash.com\/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop","banner":null,"rating":4.8,"specialty":["Comedy","Drama"],"bio":"Expert storytelling through voice. Known for his unique comedic timing.","translatedCount":980,"moviesCount":5},{"id":3,"name":"VJ Mark","slug":"vj-mark","image":"https:\/\/images.unsplash.com\/photo-1472099645785-5658abf4ff4e?w=400&h=400&fit=crop","banner":null,"rating":4.7,"specialty":["Horror","Mystery"],"bio":"The voice of tension. Specialized in high-stakes thrillers and horror.","translatedCount":650,"moviesCount":4},{"id":4,"name":"VJ Emmy","slug":"vj-emmy","image":"https:\/\/images.unsplash.com\/photo-1539571696357-5a69c17a67c6?w=400&h=400&fit=crop","banner":null,"rating":4.6,"specialty":["Action","Romance"],"bio":"The voice of the youth. Combining modern slang with traditional storytelling.","translatedCount":420,"moviesCount":1}]}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: 'api/v1/vjs/{id}'
+    metadata:
+      custom: []
+      groupName: VJs
+      groupDescription: |-
+
+        List and fetch VJs (translators/presenters). Filter by featured; order by rating or movies count.
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters:
+      id:
+        custom: []
+        name: id
+        description: 'The ID of the vj.'
+        required: true
+        example: 1
+        type: integer
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanUrlParameters:
+      id: 1
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"id":1,"slug":"vj-junior","name":"VJ Junior","image":"https:\/\/images.unsplash.com\/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop","banner":"https:\/\/images.unsplash.com\/photo-1492684223066-81342ee5ff30?w=1920&h=600&fit=crop","rating":4.9,"specialty":["Action","Sci-Fi"],"bio":"The legend of Luganda translation. Over two decades of bringing global cinema to local hearts.","translatedCount":1542,"movies":[{"id":8,"slug":"ancient-echoes","title":"Ancient Echoes","thumbnail":"https:\/\/images.unsplash.com\/photo-1503174971373-b1f69850bded?w=400&h=600&fit=crop","rating":8.9,"genre":["Adventure","Mystery"]}]}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null

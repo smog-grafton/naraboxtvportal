@@ -1,0 +1,161 @@
+name: Actors
+description: |-
+
+  Cast. List with search/trending; get by id or slug with movies.
+endpoints:
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/actors
+    metadata:
+      custom: []
+      groupName: Actors
+      groupDescription: |-
+
+        Cast. List with search/trending; get by id or slug with movies.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'List actors. Query: search, trending (1), per_page.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"data":[{"id":96,"name":"Misha Collins","slug":"misha-collins","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_05718096e14f828cd9a69e83fe6b4148.jpg","bio":null,"moviesCount":0},{"id":95,"name":"Jensen Ackles","slug":"jensen-ackles","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_0409aad854c4e103b5034d15fc529c05.jpg","bio":null,"moviesCount":0},{"id":94,"name":"Jared Padalecki","slug":"jared-padalecki","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_6e8096be9df5f4dddc8e69d4d78a49ad.jpg","bio":null,"moviesCount":0},{"id":93,"name":"Nell Fisher","slug":"nell-fisher","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_4e89f2a830b3a5acce09b06d0d4b19dc.jpg","bio":null,"moviesCount":0},{"id":92,"name":"Linda Hamilton","slug":"linda-hamilton","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_15909a19c24eee8c0f53f576bd9e1fdf.jpg","bio":null,"moviesCount":0},{"id":91,"name":"Jamie Campbell Bower","slug":"jamie-campbell-bower","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_4d08bc9ef20c3f3e1e9c25e874898015.jpg","bio":null,"moviesCount":0},{"id":90,"name":"Brett Gelman","slug":"brett-gelman","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_3102e3d8d5bddb1e0e70c5474d5d97e0.jpg","bio":null,"moviesCount":0},{"id":89,"name":"Priah Ferguson","slug":"priah-ferguson","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_38498bfe42d8b2473333b7ba8474aec8.jpg","bio":null,"moviesCount":0},{"id":88,"name":"Cara Buono","slug":"cara-buono","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_37ffad63fc52b119bcb71c9a4b3b0e91.jpg","bio":null,"moviesCount":0},{"id":87,"name":"Maya Hawke","slug":"maya-hawke","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_9b81fbd6db7177ef8214d17dcb8e0a1b.jpg","bio":null,"moviesCount":0},{"id":86,"name":"Joe Keery","slug":"joe-keery","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_3effa5927187ac83c18f9be1bb4aa608.jpg","bio":null,"moviesCount":0},{"id":85,"name":"Natalia Dyer","slug":"natalia-dyer","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_8e7a4486f7fcd19d455109f3d421111c.jpg","bio":null,"moviesCount":0},{"id":84,"name":"Charlie Heaton","slug":"charlie-heaton","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_92ae32e506cd2527e95d0847d372bf50.jpg","bio":null,"moviesCount":0},{"id":83,"name":"Sadie Sink","slug":"sadie-sink","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_6402a1f20e68d274ba4a1bd1e6b26de1.jpg","bio":null,"moviesCount":0},{"id":82,"name":"Noah Schnapp","slug":"noah-schnapp","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_3267efae461f1539ae11ae65aaf1748e.jpg","bio":null,"moviesCount":0},{"id":81,"name":"Caleb McLaughlin","slug":"caleb-mclaughlin","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_2ca79b257871c56a16cba3acf91f6b74.jpg","bio":null,"moviesCount":0},{"id":80,"name":"Gaten Matarazzo","slug":"gaten-matarazzo","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_5c57d3372a77f036a6a867fbf72f6c10.jpg","bio":null,"moviesCount":0},{"id":79,"name":"Finn Wolfhard","slug":"finn-wolfhard","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_e90f9df98183b8f53e4d55eab0ddfe52.jpg","bio":null,"moviesCount":0},{"id":78,"name":"David Harbour","slug":"david-harbour","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_aa47014f57653805580488d1bea5666a.jpg","bio":null,"moviesCount":0},{"id":77,"name":"Winona Ryder","slug":"winona-ryder","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_0ea637a3afaf067d551155817619b800.jpg","bio":null,"moviesCount":0}],"meta":{"current_page":1,"last_page":5,"per_page":20,"total":96}}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/actors/trending
+    metadata:
+      custom: []
+      groupName: Actors
+      groupDescription: |-
+
+        Cast. List with search/trending; get by id or slug with movies.
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"data":[{"id":1,"name":"Tom Hardy","slug":"tom-hardy","image":"https:\/\/images.unsplash.com\/photo-1500648767791-00dcc994a43e?w=400&h=600&fit=crop","bio":"Acclaimed actor known for intense performances","moviesCount":22},{"id":2,"name":"Zendaya","slug":"zendaya","image":"https:\/\/images.unsplash.com\/photo-1494790108377-be9c29b29330?w=400&h=600&fit=crop","bio":"Rising star in modern cinema","moviesCount":21},{"id":4,"name":"Florence Pugh","slug":"florence-pugh","image":"https:\/\/images.unsplash.com\/photo-1531746020798-e6953c6e8e04?w=400&h=600&fit=crop","bio":"Award-winning actress","moviesCount":21},{"id":5,"name":"Austin Butler","slug":"austin-butler","image":"https:\/\/images.unsplash.com\/photo-1506794778202-cad84cf45f1d?w=400&h=600&fit=crop","bio":"Talented performer","moviesCount":21},{"id":3,"name":"Cillian Murphy","slug":"cillian-murphy","image":"https:\/\/images.unsplash.com\/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop","bio":"Versatile actor with remarkable range","moviesCount":20},{"id":6,"name":"Glen Powell","slug":"glen-powell","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_dc0231283b20ba9137b89911aa3a86b1.jpg","bio":null,"moviesCount":1},{"id":7,"name":"Josh Brolin","slug":"josh-brolin","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_d56240ed42b0004e0580f363b5ba76a6.jpg","bio":null,"moviesCount":1},{"id":8,"name":"Colman Domingo","slug":"colman-domingo","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_28483513c305c919bf1bcf698f90d313.jpg","bio":null,"moviesCount":1},{"id":9,"name":"Lee Pace","slug":"lee-pace","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_1f4b4e2c85c7872f783cdbdacf6350d2.jpg","bio":null,"moviesCount":1},{"id":10,"name":"Michael Cera","slug":"michael-cera","image":"http:\/\/127.0.0.1:8000\/storage\/tmdb\/actors\/tmdb_8a587cec8890c44293a70b16083b15ef.jpg","bio":null,"moviesCount":1}]}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: 'api/v1/actors/{id}'
+    metadata:
+      custom: []
+      groupName: Actors
+      groupDescription: |-
+
+        Cast. List with search/trending; get by id or slug with movies.
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters:
+      id:
+        custom: []
+        name: id
+        description: 'The ID of the actor.'
+        required: true
+        example: 1
+        type: integer
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanUrlParameters:
+      id: 1
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"id":1,"name":"Tom Hardy","slug":"tom-hardy","image":"https:\/\/images.unsplash.com\/photo-1500648767791-00dcc994a43e?w=400&h=600&fit=crop","bio":"Acclaimed actor known for intense performances","moviesCount":22,"movies":[{"id":17,"title":"Void Walkers","description":"Interdimensional agents.","thumbnail":"https:\/\/images.unsplash.com\/photo-1451187580459-43490279c0fa?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1451187580459-43490279c0fa?w=1920&h=1080&fit=crop","rating":9,"releaseDate":"2024-01-20","category":"Series","mediaType":"SERIES","vj":null,"genre":["Action","Sci-Fi"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":18,"title":"Bloodlines","description":"Family feuds in history.","thumbnail":"https:\/\/images.unsplash.com\/photo-1533929736458-ca588d08c8be?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1533929736458-ca588d08c8be?w=1920&h=1080&fit=crop","rating":8.4,"releaseDate":"2023-09-15","category":"Series","mediaType":"SERIES","vj":null,"genre":["Drama","History"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":19,"title":"Neon Shadows","description":"Cyber detective stories.","thumbnail":"https:\/\/images.unsplash.com\/photo-1550745165-9bc0b252726f?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1550745165-9bc0b252726f?w=1920&h=1080&fit=crop","rating":8.7,"releaseDate":"2024-03-10","category":"Series","mediaType":"SERIES","vj":"VJ Mark","genre":["Crime","Sci-Fi"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":20,"title":"The Last Oracle","description":"Fantasy epic.","thumbnail":"https:\/\/images.unsplash.com\/photo-1514539079130-25950c84af65?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1514539079130-25950c84af65?w=1920&h=1080&fit=crop","rating":9.5,"releaseDate":"2024-07-25","category":"Series","mediaType":"SERIES","vj":null,"genre":["Adventure","Fantasy"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":21,"title":"Concrete Jungle","description":"Modern day survival.","thumbnail":"https:\/\/images.unsplash.com\/photo-1449824913935-59a10b8d2000?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1449824913935-59a10b8d2000?w=1920&h=1080&fit=crop","rating":7.6,"releaseDate":"2024-02-05","category":"Series","mediaType":"SERIES","vj":null,"genre":["Drama","Thriller"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":23,"title":"Stellar Wind","description":"Space colonies.","thumbnail":"https:\/\/images.unsplash.com\/photo-1451187580459-43490279c0fa?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1451187580459-43490279c0fa?w=1920&h=1080&fit=crop","rating":8.8,"releaseDate":"2023-12-01","category":"Series","mediaType":"SERIES","vj":null,"genre":["Sci-Fi"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":24,"title":"Urban Legend","description":"Modern myths.","thumbnail":"https:\/\/images.unsplash.com\/photo-1478720568477-152d9b164e26?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1478720568477-152d9b164e26?w=1920&h=1080&fit=crop","rating":7.9,"releaseDate":"2024-10-12","category":"Series","mediaType":"SERIES","vj":"VJ Mark","genre":["Horror","Mystery"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":16,"title":"Kampala Nights: Series","description":"Weekly racing drama.","thumbnail":"https:\/\/images.unsplash.com\/photo-1511671782779-c97d3d27a1d4?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1511671782779-c97d3d27a1d4?w=1920&h=1080&fit=crop","rating":8.5,"releaseDate":"2024-05-15","category":"VJ Translated","mediaType":"SERIES","vj":"VJ Jingo","genre":["Action","Crime"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":22,"title":"Pulse Rate","description":"Medical thriller.","thumbnail":"https:\/\/images.unsplash.com\/photo-1505751172876-fa1923c5c528?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1505751172876-fa1923c5c528?w=1920&h=1080&fit=crop","rating":8.1,"releaseDate":"2024-08-18","category":"Series","mediaType":"SERIES","vj":"VJ Jingo","genre":["Drama","Medical"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":5,"title":"The Iron Fist","description":"Martial arts drama.","thumbnail":"https:\/\/images.unsplash.com\/photo-1552072092-7f9b8d63efcb?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1552072092-7f9b8d63efcb?w=1920&h=1080&fit=crop","rating":8.2,"releaseDate":"2024-01-05","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Action"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":7,"title":"Neon Pulse","description":"Cyberpunk music.","thumbnail":"https:\/\/images.unsplash.com\/photo-1550684848-fac1c5b4e853?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1550684848-fac1c5b4e853?w=1920&h=1080&fit=crop","rating":7.5,"releaseDate":"2023-11-20","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Music","Sci-Fi"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":11,"title":"Desert Storm","description":"War epic.","thumbnail":"https:\/\/images.unsplash.com\/photo-1509062522246-3755977927d7?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1509062522246-3755977927d7?w=1920&h=1080&fit=crop","rating":9.3,"releaseDate":"2024-06-22","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Action","History"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":12,"title":"The Last Stand","description":"Western showdown.","thumbnail":"https:\/\/images.unsplash.com\/photo-1533929736458-ca588d08c8be?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1533929736458-ca588d08c8be?w=1920&h=1080&fit=crop","rating":8.1,"releaseDate":"2024-07-04","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Action","Western"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":13,"title":"Quantum Drift","description":"Time travel racing.","thumbnail":"https:\/\/images.unsplash.com\/photo-1542281286-9e0a16bb7366?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1542281286-9e0a16bb7366?w=1920&h=1080&fit=crop","rating":8.6,"releaseDate":"2024-08-11","category":"Movie","mediaType":"MOVIE","vj":"VJ Jingo","genre":["Racing","Sci-Fi"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":2,"title":"Kampala Nights","description":"High stakes, high speed, and local dialect.","thumbnail":"https:\/\/images.unsplash.com\/photo-1511671782779-c97d3d27a1d4?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1511671782779-c97d3d27a1d4?w=1920&h=1080&fit=crop","rating":8.5,"releaseDate":"2024-05-15","category":"VJ Translated","mediaType":"MOVIE","vj":"VJ Jingo","genre":["Action","Crime"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":8,"title":"Ancient Echoes","description":"When a team of archaeologists discovers a lost civilization buried beneath the desert sands.","thumbnail":"https:\/\/images.unsplash.com\/photo-1503174971373-b1f69850bded?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1503174971373-b1f69850bded?w=1920&h=1080&fit=crop","rating":8.9,"releaseDate":"2024-09-01","category":"Movie","mediaType":"MOVIE","vj":"VJ Junior","genre":["Adventure","Mystery"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":"2h 32m","role":"Character 1"},{"id":9,"title":"Deep Frost","description":"Arctic survival.","thumbnail":"https:\/\/images.unsplash.com\/photo-1517783999520-f068d7431a60?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1517783999520-f068d7431a60?w=1920&h=1080&fit=crop","rating":8.4,"releaseDate":"2024-03-30","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Action","Thriller"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":10,"title":"Midnight Rain","description":"Film noir.","thumbnail":"https:\/\/images.unsplash.com\/photo-1485846234645-a62644f84728?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1485846234645-a62644f84728?w=1920&h=1080&fit=crop","rating":7.8,"releaseDate":"2023-10-15","category":"Movie","mediaType":"MOVIE","vj":"VJ Emmy","genre":["Crime","Drama"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":14,"title":"Siren Call","description":"Ocean mystery.","thumbnail":"https:\/\/images.unsplash.com\/photo-1505118380757-91f5f5632de0?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1505118380757-91f5f5632de0?w=1920&h=1080&fit=crop","rating":7.2,"releaseDate":"2024-10-31","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Horror","Mystery"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":3,"title":"Cyber Enigma","description":"In a world where digital consciousness has become reality, a rogue AI threatens to merge human minds with the virtual realm.","thumbnail":"https:\/\/images.unsplash.com\/photo-1550751827-4bd374c3f58b?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1550751827-4bd374c3f58b?w=1920&h=1080&fit=crop","rating":7.9,"releaseDate":"2024-08-20","category":"Movie","mediaType":"MOVIE","vj":"VJ Jingo","genre":["Sci-Fi","Thriller"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":"2h 15m","role":"Character 1"},{"id":4,"title":"Lost in the Rift","description":"Space exploration.","thumbnail":"https:\/\/images.unsplash.com\/photo-1446776811953-b23d57bd21aa?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1446776811953-b23d57bd21aa?w=1920&h=1080&fit=crop","rating":9.1,"releaseDate":"2023-12-10","category":"Movie","mediaType":"MOVIE","vj":null,"genre":["Adventure"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":null,"role":"Character 1"},{"id":6,"title":"Shadow Walker","description":"A master ninja emerges from the shadows to protect a secret that could change the world.","thumbnail":"https:\/\/images.unsplash.com\/photo-1518709268805-4e9042af9f23?w=400&h=600&fit=crop","backdrop":"https:\/\/images.unsplash.com\/photo-1518709268805-4e9042af9f23?w=1920&h=1080&fit=crop","rating":8.7,"releaseDate":"2024-02-14","category":"Movie","mediaType":"MOVIE","vj":"VJ Mark","genre":["Action","Thriller"],"trendingScore":0,"accessType":null,"videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","duration":"1h 58m","role":"Character 1"}]}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null

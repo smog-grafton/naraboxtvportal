@@ -5,13 +5,20 @@ namespace App\Services;
 use App\Models\CreatorContentSubmission;
 use App\Models\CreatorUploadSession;
 use App\Models\VideoSource;
+use App\Services\Storage\StorageTargetRegistry;
+use App\Support\LegacyCdnUrlResolver;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class NbxVideoSourceService
 {
-    public function __construct(private readonly UserNotificationService $notifications) {}
+    public function __construct(
+        private readonly UserNotificationService $notifications,
+        private readonly StorageTargetRegistry $storageTargets,
+        private readonly LegacyCdnUrlResolver $legacyCdnUrlResolver,
+    ) {}
 
     public function registerDirectStorageSource(VideoSource $source): array
     {
@@ -19,9 +26,9 @@ class NbxVideoSourceService
         $metadata = (array) ($source->metadata ?? []);
         $objectKey = $this->nonEmpty($source->storage_object_key ?? $metadata['object_key'] ?? null);
         if (! $objectKey) {
-            throw new \RuntimeException('The direct Contabo source is missing its object key.');
+            throw new \RuntimeException('The direct object-storage source is missing its object key.');
         }
-        $disk = (string) ($source->storage_disk ?: 'contabo');
+        $disk = (string) ($source->storage_disk ?: app(ContaboObjectStorageService::class)->diskName());
         try {
             $exists = Storage::disk($disk)->exists($objectKey);
         } catch (\Throwable $exception) {
@@ -60,7 +67,7 @@ class NbxVideoSourceService
         ]);
 
         if (! ($response['ok'] ?? false)) {
-            throw new \RuntimeException((string) ($response['error'] ?? 'NBX could not register the Contabo object.'));
+            throw new \RuntimeException((string) ($response['error'] ?? 'NBX could not register the storage object.'));
         }
 
         $registration = (array) ($response['data'] ?? []);
@@ -85,6 +92,8 @@ class NbxVideoSourceService
     {
         $this->ensureConfigured();
 
+        $data['url'] = $this->legacyCdnUrlResolver->resolve($data['url'] ?? null);
+
         $payload = $this->jobPayload($sourceable, $data, $assetType);
         $payload['source_url'] = trim((string) ($data['url'] ?? ''));
 
@@ -98,6 +107,51 @@ class NbxVideoSourceService
         }
 
         return $this->upsertFromDiscoveryPayload($sourceable, $response['data'] ?? [], $data);
+    }
+
+    public function submitLegacyCdn(Model $sourceable, array $data, string $assetType): VideoSource
+    {
+        $legacyUrl = trim((string) ($data['url'] ?? ''));
+        if ($legacyUrl === '') {
+            throw new \RuntimeException('Please enter the legacy CDN media URL.');
+        }
+
+        $resolvedUrl = $this->legacyCdnUrlResolver->resolve($legacyUrl);
+        if (! is_string($resolvedUrl) || $resolvedUrl === '') {
+            throw new \RuntimeException('The legacy CDN source has no usable original or stored media URL.');
+        }
+
+        $data['url'] = $resolvedUrl;
+        $migration = [
+            'kind' => 'legacy_cdn',
+            'state' => 'trying_legacy_public',
+            'legacy_asset_id' => null,
+            'legacy_source_id' => null,
+            'lookup_url' => $legacyUrl,
+            'resolved_source_url' => $resolvedUrl,
+            'original_source_url' => null,
+            'fallback_source_url' => $resolvedUrl,
+            'stored_filename' => basename((string) parse_url($resolvedUrl, PHP_URL_PATH)) ?: null,
+            'requested_at' => now()->toIso8601String(),
+        ];
+        $migration['idempotency_key'] = (string) ($data['idempotency_key'] ?? hash('sha256', implode('|', [
+            'portal-legacy-cdn-form-v1',
+            $sourceable::class,
+            (string) $sourceable->getKey(),
+            $resolvedUrl,
+        ])));
+        $data['idempotency_key'] = $migration['idempotency_key'];
+        $data['migration'] = $migration;
+        $data['metadata'] = array_merge((array) ($data['metadata'] ?? []), [
+            'legacy_cdn' => [
+                'lookup_url' => $legacyUrl,
+                'resolved_url' => $resolvedUrl,
+                'resolved_at' => now()->toIso8601String(),
+            ],
+            'legacy_cdn_migration' => $migration,
+        ]);
+
+        return $this->submitRemote($sourceable, $data, $assetType);
     }
 
     public function submitTelegram(Model $sourceable, array $data, string $assetType): VideoSource
@@ -164,6 +218,14 @@ class NbxVideoSourceService
         $metadata = (array) ($source->metadata ?? []);
         $metadata['desired_is_active'] = (bool) ($data['is_active'] ?? $metadata['desired_is_active'] ?? $source->is_active);
         $lastRequest = (array) ($metadata['processing_config']['last_request'] ?? []);
+        // An ordinary metadata-only edit that doesn't touch the storage
+        // target field must not be treated as "switched to auto" — that
+        // would spuriously flag a reprocess as required. Default to the
+        // already-stored (normalized) target instead of
+        // processingRequestFromForm()'s own "auto" default, which is only
+        // appropriate for brand-new submissions with no prior request.
+        $data['nbx_storage_target'] = $data['nbx_storage_target']
+            ?? $this->storageTargets->normalizeStoredKey($lastRequest['storage_target'] ?? null);
         $draft = $this->processingRequestFromForm($data);
         if ($draft !== [] && $draft !== $this->processingRequestFromStored($lastRequest)) {
             $metadata['processing_config']['draft'] = $draft;
@@ -214,7 +276,7 @@ class NbxVideoSourceService
                 ?? $metadata['source_url']
                 ?? $metadata['telegram_url']
                 ?? $source->url,
-            'nbx_storage_target' => $request['storage_target'] ?? $metadata['nbx']['storage_target'] ?? 'contabo',
+            'nbx_storage_target' => $this->storageTargets->normalizeStoredKey($request['storage_target'] ?? $metadata['nbx']['storage_target'] ?? null),
             'nbx_faststart' => (bool) ($request['faststart'] ?? true),
             'nbx_compress_enabled' => (bool) ($request['compression'] ?? $request['compress_enabled'] ?? false),
             'nbx_hls_480p' => (bool) ($request['hls']['480p'] ?? $request['hls_480p'] ?? false),
@@ -246,7 +308,10 @@ class NbxVideoSourceService
             'object_disk' => $object['disk'] ?? app(ContaboObjectStorageService::class)->diskName(),
             'object_key' => $object['key'] ?? null,
             'import_mode' => (string) ($data['import_mode'] ?? 'queue'),
-            'storage_target' => (string) ($data['nbx_storage_target'] ?? 'contabo'),
+            // Backfilled objects already physically live in the legacy bucket
+            // (BackfillContaboNbxSources scans it), so default there rather
+            // than to "auto" unless the operator explicitly overrides it.
+            'storage_target' => $this->storageTargets->normalizeStoredKey($data['nbx_storage_target'] ?? null),
             'faststart' => true,
             'hls_480p' => true,
             'hls_720p' => (bool) ($data['include_720p'] ?? $data['nbx_hls_720p'] ?? false),
@@ -415,7 +480,13 @@ class NbxVideoSourceService
             ?? true
         );
         $sources = is_array($payload['sources'] ?? null) ? $payload['sources'] : [];
-        $storageTarget = (string) ($payload['storage_target'] ?? $payload['metadata']['nbx']['storage_target'] ?? $existingMetadata['nbx']['storage_target'] ?? 'contabo');
+        $storageTarget = (string) ($payload['storage_target'] ?? $payload['metadata']['nbx']['storage_target'] ?? $existingMetadata['nbx']['storage_target'] ?? $this->storageTargets->legacyKey());
+        // NBX resolves "auto" to a concrete bucket on its side and should report
+        // that concrete key back; if it ever doesn't, don't persist "auto" as a
+        // stored target — fall back to the legacy key rather than an ambiguous one.
+        $storedStorageTargetKey = $this->storageTargets->isAutoKey($storageTarget)
+            ? $this->storageTargets->legacyKey()
+            : $this->storageTargets->normalizeStoredKey($storageTarget);
         $hlsUrl = $this->nbxPublicUrl(
             $payload['hls_master_url'] ?? $playback['hls_master_url'] ?? $this->sourceUrl($sources, ['hls', 'hls_master']) ?? $existingMetadata['hls_master_url'] ?? null,
             $storageTarget,
@@ -514,6 +585,31 @@ class NbxVideoSourceService
             'last_synced_at' => now()->toDateTimeString(),
         ]);
 
+        $incomingMigration = is_array($payload['metadata']['migration'] ?? null)
+            ? $payload['metadata']['migration']
+            : (is_array($payload['metadata']['legacy_cdn_migration'] ?? null)
+                ? $payload['metadata']['legacy_cdn_migration']
+                : null);
+        $migration = is_array($metadata['legacy_cdn_migration'] ?? null)
+            ? $metadata['legacy_cdn_migration']
+            : [];
+        if (is_array($incomingMigration)) {
+            $migration = array_merge($migration, $incomingMigration);
+        }
+        if ($migration !== []) {
+            if ($status === 'completed' && $hasUsableSource) {
+                $migration['state'] = 'migrated';
+                $migration['completed_at'] = now()->toIso8601String();
+            } elseif ($status === 'failed' && ! in_array((string) ($migration['state'] ?? ''), [
+                'legacy_cdn_security_challenge',
+                'legacy_push_requested',
+                'receiving_legacy_push',
+            ], true)) {
+                $migration['state'] = 'failed';
+            }
+            $metadata['legacy_cdn_migration'] = $migration;
+        }
+
         $record = null;
         if (! empty($formData['record_id'])) {
             $record = VideoSource::whereKey((int) $formData['record_id'])->first();
@@ -559,6 +655,7 @@ class NbxVideoSourceService
             'storage_disk' => $storageTarget,
             'storage_bucket' => $payload['storage_bucket'] ?? $payload['metadata']['nbx']['storage_bucket'] ?? null,
             'storage_object_key' => $this->sourceObjectKey($sources, $mainIsHlsOnly ? ['hls_master', 'hls'] : ['playback_progressive', 'faststart']),
+            'storage_target_key' => $storedStorageTargetKey,
             'nbx_asset_id' => $payload['asset_id'] ?? $record?->nbx_asset_id ?? $existingMetadata['cdn_asset_id'] ?? null,
             'processing_job_id' => $jobId !== '' ? $jobId : null,
             'metadata' => array_merge($metadata, ['source_role' => $mainIsHlsOnly ? 'hls_master' : 'mp4_primary']),
@@ -657,17 +754,57 @@ class NbxVideoSourceService
         if (Str::contains((string) ($event ?: $payload['event'] ?? ''), '.skipped')) {
             $metadata['last_message'] = (string) ($payload['context']['reason'] ?? 'NBX quality skipped.');
         }
-        if (($event ?: $payload['event'] ?? '') === 'job.failed') {
-            $metadata['fetch_status'] = 'failed';
-        } elseif (($event ?: $payload['event'] ?? '') === 'job.partially_completed') {
-            $metadata['fetch_status'] = 'partially_completed';
-        } elseif (($event ?: $payload['event'] ?? '') === 'job.completed') {
-            $metadata['fetch_status'] = 'completed';
+
+        // NBX's row updated_at strictly advances on every state change
+        // (NbxWebhookDispatcher::payload() sends it as timestamps.updated_at).
+        // A delayed/retried delivery of an older event must not regress a
+        // source that a newer delivery has already moved past — e.g. a late
+        // "job.failed" arriving after "job.completed" flipping a working
+        // asset back to failed.
+        $incomingUpdatedAt = $this->parseWebhookTimestamp($payload['timestamps']['updated_at'] ?? null);
+        $lastAppliedUpdatedAt = $this->parseWebhookTimestamp($metadata['nbx_last_event_updated_at'] ?? null);
+        $isStale = $incomingUpdatedAt !== null
+            && $lastAppliedUpdatedAt !== null
+            && $incomingUpdatedAt->lt($lastAppliedUpdatedAt);
+
+        if ($isStale) {
+            Log::warning('Ignoring stale NBX webhook status for video source', [
+                'video_source_id' => $source->id,
+                'nbx_job_id' => $sourceJobId,
+                'event' => $event ?: ($payload['event'] ?? null),
+                'incoming_updated_at' => $incomingUpdatedAt->toIso8601String(),
+                'last_applied_updated_at' => $lastAppliedUpdatedAt->toIso8601String(),
+            ]);
+        } else {
+            if (($event ?: $payload['event'] ?? '') === 'job.failed') {
+                $metadata['fetch_status'] = 'failed';
+            } elseif (($event ?: $payload['event'] ?? '') === 'job.partially_completed') {
+                $metadata['fetch_status'] = 'partially_completed';
+            } elseif (($event ?: $payload['event'] ?? '') === 'job.completed') {
+                $metadata['fetch_status'] = 'completed';
+            }
+
+            if ($incomingUpdatedAt !== null) {
+                $metadata['nbx_last_event_updated_at'] = $incomingUpdatedAt->toIso8601String();
+            }
         }
 
         $source->update(['metadata' => $metadata]);
 
         return $source->fresh();
+    }
+
+    private function parseWebhookTimestamp(mixed $value): ?\Illuminate\Support\Carbon
+    {
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return \Illuminate\Support\Carbon::parse($value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function syncCreatorSubmission(
@@ -881,6 +1018,10 @@ class NbxVideoSourceService
             json_encode($processing, JSON_UNESCAPED_SLASHES) ?: '',
         ])));
 
+        if (is_array($data['migration'] ?? null)) {
+            $payload['migration'] = $data['migration'];
+        }
+
         $callbackUrl = $this->callbackUrl();
         if ($callbackUrl !== '') {
             $payload['callback_url'] = $callbackUrl;
@@ -893,15 +1034,33 @@ class NbxVideoSourceService
      * Keep this normalized shape identical for initial submissions, edit hydration,
      * draft comparisons and explicit reprocessing.
      */
+    private function normalizeFormStorageTarget(?string $value): string
+    {
+        if ($value === null || $value === '') {
+            return 'auto';
+        }
+
+        if ($value === 'contabo') {
+            return $this->storageTargets->legacyKey();
+        }
+
+        return $value;
+    }
+
     private function processingRequestFromForm(array $data): array
     {
         $retention = (string) ($data['nbx_retention_policy'] ?? 'optimized_only');
-        if (! in_array($retention, ['optimized_only', 'retain_original'], true)) {
+        if (! in_array($retention, ['optimized_only', 'keep_original_only', 'retain_original'], true)) {
             $retention = 'optimized_only';
         }
 
         return [
-            'storage_target' => (string) ($data['nbx_storage_target'] ?? 'contabo'),
+            // Default of last resort for brand-new submissions with no
+            // explicit choice: let NBX/Portal pick automatically. The
+            // legacy "contabo" literal is normalized here too so every
+            // caller (raw form data, reconstructed "stored" requests,
+            // draft-vs-stored comparisons) converges on the same value.
+            'storage_target' => $this->normalizeFormStorageTarget($data['nbx_storage_target'] ?? null),
             'faststart' => (bool) ($data['nbx_faststart'] ?? true),
             'compress_enabled' => (bool) ($data['nbx_compress_enabled'] ?? false),
             'hls_480p' => (bool) ($data['nbx_hls_480p'] ?? false),
@@ -910,7 +1069,7 @@ class NbxVideoSourceService
             'allow_downloads' => (bool) ($data['nbx_allow_downloads'] ?? true),
             'allow_hls_streaming' => (bool) ($data['nbx_allow_hls_streaming'] ?? true),
             'retention_policy' => $retention,
-            'retain_original' => $retention === 'retain_original',
+            'retain_original' => in_array($retention, ['keep_original_only', 'retain_original'], true),
             'processing_preset' => (string) ($data['nbx_processing_preset'] ?? 'automatic'),
             'max_resolution' => (int) ($data['nbx_max_resolution'] ?? 720),
             'crf' => max(18, min(32, (int) ($data['nbx_crf'] ?? 23))),
@@ -940,7 +1099,7 @@ class NbxVideoSourceService
     private function processingRequestFromStored(array $request): array
     {
         return $this->processingRequestFromForm([
-            'nbx_storage_target' => $request['storage_target'] ?? 'contabo',
+            'nbx_storage_target' => $this->storageTargets->normalizeStoredKey($request['storage_target'] ?? null),
             'nbx_faststart' => $request['faststart'] ?? true,
             'nbx_compress_enabled' => $request['compress_enabled'] ?? $request['compression'] ?? false,
             'nbx_hls_480p' => $request['hls_480p'] ?? $request['hls']['480p'] ?? false,
@@ -1128,12 +1287,14 @@ class NbxVideoSourceService
 
     private function objectKeyFromUrl(string $url): ?string
     {
-        $base = rtrim((string) config('services.contabo_object_storage.public_url', ''), '/');
-        if ($base === '' || ! str_starts_with($url, $base.'/')) {
-            return null;
+        foreach ($this->storageTargets->all() as $target) {
+            $base = $target->publicUrl;
+            if ($base !== '' && str_starts_with($url, $base.'/')) {
+                return rawurldecode(ltrim(substr($url, strlen($base)), '/'));
+            }
         }
 
-        return rawurldecode(ltrim(substr($url, strlen($base)), '/'));
+        return null;
     }
 
     private function ensureConfigured(): void
@@ -1170,7 +1331,7 @@ class NbxVideoSourceService
             return null;
         }
 
-        if ($storageTarget === 'contabo' && $this->isNbxLocalMediaUrl($url)) {
+        if ($this->storageTargets->normalizeStoredKey($storageTarget) === $this->storageTargets->legacyKey() && $this->isNbxLocalMediaUrl($url)) {
             return null;
         }
 

@@ -3,7 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Filament\Resources\PaymentTransactionResource;
-use App\Models\PaymentTransaction;
+use App\Services\DashboardMetricsService;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 
@@ -15,47 +15,34 @@ class RevenueStatsWidget extends StatsOverviewWidget
 
     protected ?string $heading = 'Revenue Overview';
 
-    protected ?string $description = 'Revenue is calculated from successful payment transactions only.';
+    protected ?string $description = 'Successful transactions grouped by actual type and reconciled with canonical creator/partner allocations.';
 
     protected function getStats(): array
     {
-        $successfulTransactions = PaymentTransaction::query()->where('status', 'SUCCESS');
-        $today = today();
-        $now = now();
-
-        $todayRevenue = (clone $successfulTransactions)
-            ->whereDate('created_at', $today)
-            ->sum('amount');
-
-        $monthlyRevenue = (clone $successfulTransactions)
-            ->whereYear('created_at', $now->year)
-            ->whereMonth('created_at', $now->month)
-            ->sum('amount');
-
-        $overallRevenue = (clone $successfulTransactions)->sum('amount');
-        $successfulCount = (clone $successfulTransactions)->count();
+        $metrics = app(DashboardMetricsService::class)->snapshot()['revenue'];
+        $byType = $metrics['by_type'];
 
         return [
-            Stat::make("Today's Revenue", $this->formatCurrency($todayRevenue))
-                ->description('Successful transactions on ' . $today->format('M j, Y'))
+            Stat::make("Today's Revenue", $this->formatCurrency($metrics['today']))
+                ->description('Successful transactions since the start of today')
                 ->descriptionIcon('heroicon-m-calendar-days')
                 ->icon('heroicon-o-banknotes')
                 ->color('success')
                 ->url(PaymentTransactionResource::getUrl('index')),
-            Stat::make('Monthly Revenue', $this->formatCurrency($monthlyRevenue))
-                ->description('Successful transactions in ' . $now->format('F Y'))
+            Stat::make('Monthly Revenue', $this->formatCurrency($metrics['month']))
+                ->description('Successful transactions since the start of this month')
                 ->descriptionIcon('heroicon-m-chart-bar')
                 ->icon('heroicon-o-chart-bar')
                 ->color('primary')
                 ->url(PaymentTransactionResource::getUrl('index')),
-            Stat::make('Overall Revenue', $this->formatCurrency($overallRevenue))
-                ->description('Total successful transaction value')
+            Stat::make('Retained Revenue', $this->formatCurrency($metrics['retained']))
+                ->description('Gross less canonical creator and partner allocations')
                 ->descriptionIcon('heroicon-m-arrow-trending-up')
                 ->icon('heroicon-o-currency-dollar')
                 ->color('warning')
                 ->url(PaymentTransactionResource::getUrl('index')),
-            Stat::make('Successful Transactions', number_format($successfulCount))
-                ->description('Completed payment transactions in the system')
+            Stat::make('Revenue by Type', $this->formatBreakdown($byType))
+                ->description('Actual transaction categories from successful payments')
                 ->descriptionIcon('heroicon-m-check-badge')
                 ->icon('heroicon-o-check-badge')
                 ->color('gray')
@@ -65,6 +52,17 @@ class RevenueStatsWidget extends StatsOverviewWidget
 
     private function formatCurrency(float | int | string $amount): string
     {
-        return 'UGX ' . number_format((float) $amount, 2);
+        return 'UGX ' . number_format((float) $amount, 0);
+    }
+
+    private function formatBreakdown(array $byType): string
+    {
+        if ($byType === []) {
+            return 'UGX 0';
+        }
+
+        return collect($byType)
+            ->map(fn ($amount, $type): string => $type . ' ' . $this->formatCurrency($amount))
+            ->implode(' · ');
     }
 }

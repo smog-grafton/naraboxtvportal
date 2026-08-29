@@ -105,7 +105,7 @@ class MediaSourcesAudit extends Command
                         $problems[] = ['missing Contabo object', $record, 'Mark unreachable and deactivate after review', 'high', $estimated];
                     }
                 } catch (\Throwable) {
-                    $problems[] = ['storage check failed', $record, 'Check Contabo credentials/permissions', 'medium', $estimated];
+                    $problems[] = ['storage check failed', $record, 'Check object-storage credentials/permissions', 'medium', $estimated];
                 }
             }
 
@@ -115,7 +115,7 @@ class MediaSourcesAudit extends Command
                 && $source->storage_object_key
                 && empty($storageReference['id'])
             ) {
-                $problems[] = ['direct Contabo source unregistered', $record, 'Register metadata with NBX (no upload)', 'low', $estimated];
+                $problems[] = ['direct object-storage source unregistered', $record, 'Register metadata with NBX (no upload)', 'low', $estimated];
                 if ($repair && (bool) config('services.nbx_engine.enabled', false)) {
                     try {
                         $nbx->registerDirectStorageSource($source);

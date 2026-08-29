@@ -119,6 +119,21 @@ class CdnMediaClientService
         return $this->normalizeResponse($response);
     }
 
+    /**
+     * Resolve a public URL copied from the legacy CDN into its source manifest.
+     * The old CDN performs the path-to-record lookup so the portal never needs
+     * to know the legacy database schema or storage path.
+     */
+    public function lookupLegacySourceByUrl(string $legacyUrl): array
+    {
+        /** @var Response $response */
+        $response = $this->client()->get('/api/v1/media/sources/legacy-lookup', [
+            'url' => $legacyUrl,
+        ]);
+
+        return $this->normalizeResponse($response);
+    }
+
     public function getPlaybackManifest(string $assetId): array
     {
         if ($this->shouldSkipPlaybackManifestLookup()) {

@@ -57,7 +57,7 @@ class DownloadController extends Controller
             return response()->json($denial['body'], $denial['status']);
         }
 
-        $expiresAt = now()->addMinutes(5);
+        $expiresAt = now()->addHours(24);
         $downloadUrl = $this->temporaryObjectStorageUrl($downloadSource, $expiresAt)
             ?? URL::temporarySignedRoute(
                 'downloads.file',
@@ -161,7 +161,7 @@ class DownloadController extends Controller
      */
     private function accessDenial(mixed $downloadable, mixed $user): ?array
     {
-        $result = $this->mediaAccess->evaluate($downloadable, $user);
+        $result = $this->mediaAccess->evaluate($downloadable, $user, false);
         if ((bool) ($result['has_access'] ?? false)) {
             return null;
         }
@@ -235,11 +235,20 @@ class DownloadController extends Controller
     {
         $path = $url ? (string) parse_url($url, PHP_URL_PATH) : (string) $downloadSource->file_path;
         $extension = $downloadSource->format ?: pathinfo($path, PATHINFO_EXTENSION) ?: 'mp4';
-        $baseName = $downloadSource->label ?: pathinfo($path, PATHINFO_FILENAME) ?: 'download';
-        $safeBaseName = preg_replace('/[^a-zA-Z0-9._-]/', '_', $baseName) ?: 'download';
+
+        $title = optional($downloadSource->downloadable)->title;
+        $quality = $downloadSource->quality ?: null;
+
+        $baseName = trim(collect([$title, $quality])->filter()->implode(' '));
+        if ($baseName === '') {
+            $baseName = $downloadSource->label ?: pathinfo($path, PATHINFO_FILENAME) ?: 'download';
+        }
+
+        $safeBaseName = preg_replace('/[^a-zA-Z0-9._ -]/', '', $baseName);
+        $safeBaseName = trim(preg_replace('/\s+/', ' ', (string) $safeBaseName)) ?: 'download';
         $safeExtension = preg_replace('/[^a-zA-Z0-9]/', '', $extension) ?: 'mp4';
 
-        return $safeBaseName.' - naraboxtv.com.'.$safeExtension;
+        return $safeBaseName.'.'.$safeExtension;
     }
 
     /**
@@ -323,20 +332,7 @@ class DownloadController extends Controller
             ], 404);
         }
 
-        // Determine filename
-        $filename = basename($downloadSource->file_path);
-        if ($downloadSource->label) {
-            $extension = pathinfo($filename, PATHINFO_EXTENSION);
-            $filename = $downloadSource->label.'.'.$extension;
-        }
-
-        // Clean filename for download
-        $filename = preg_replace('/[^a-zA-Z0-9._-]/', '_', $filename);
-
-        // Add naraboxtv.com branding before the extension
-        $extension = pathinfo($filename, PATHINFO_EXTENSION);
-        $nameWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
-        $filename = $nameWithoutExt.' - naraboxtv.com.'.$extension;
+        $filename = $this->downloadFilename($downloadSource);
 
         return response()->download($filePath, $filename, [
             'Content-Type' => 'application/octet-stream',

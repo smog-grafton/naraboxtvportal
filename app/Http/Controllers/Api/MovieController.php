@@ -122,6 +122,16 @@ class MovieController extends Controller
             $query->where('is_featured', true);
         }
 
+        // Country discovery (?country=india, ?country=south-korea, ...)
+        if ($request->filled('country')) {
+            $query->country($request->get('country'));
+        }
+
+        // Title search (?q=...)
+        if ($request->filled('q')) {
+            $query->where('title', 'like', '%'.$request->get('q').'%');
+        }
+
         // Handle sorting
         $sort = $request->get('sort', 'trending');
         $order = strtolower((string) $request->get('order', 'desc')) === 'asc' ? 'asc' : 'desc';
@@ -505,7 +515,7 @@ class MovieController extends Controller
 
         $legacyUrl = trim((string) ($sourceable->video_url ?? ''));
         if ($legacyUrl !== '') {
-            return $legacyUrl;
+            return app(\App\Support\LegacyCdnUrlResolver::class)->resolve($legacyUrl);
         }
 
         $sources = $sourceable->relationLoaded('videoSources')
@@ -545,7 +555,7 @@ class MovieController extends Controller
             $url = trim((string) $candidate);
 
             if ($url !== '') {
-                return $url;
+                return app(\App\Support\LegacyCdnUrlResolver::class)->resolve($url);
             }
         }
 

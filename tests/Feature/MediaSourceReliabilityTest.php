@@ -67,7 +67,7 @@ class MediaSourceReliabilityTest extends TestCase
         $this->assertLessThanOrEqual(5, $candidates->count());
     }
 
-    public function test_invalid_hls_never_displaces_existing_mp4_primary(): void
+    public function test_invalid_hls_status_is_still_returned_as_try_first_playback_candidate(): void
     {
         Http::fake([
             'https://objects.example/job/hls/master.m3u8' => Http::response(
@@ -94,9 +94,12 @@ class MediaSourceReliabilityTest extends TestCase
         $this->assertTrue((bool) $mp4->fresh()->is_primary);
         $this->assertFalse((bool) $hls->is_primary);
         $this->assertSame('invalid', $hls->health_status);
-        $this->assertFalse(
-            app(MediaSourceSelectionService::class)->candidatesFor($movie, 'web')->contains('id', $hls->id)
-        );
+        $candidates = app(MediaSourceSelectionService::class)->candidatesFor($movie, 'web');
+        $serialized = app(MediaSourceSelectionService::class)->toCandidate($candidates->firstOrFail(), true);
+
+        $this->assertSame($hls->id, $candidates->first()->id);
+        $this->assertSame('unknown', $serialized['health_status']);
+        $this->assertSame('hls_master', $serialized['role']);
     }
 
     public function test_hls_master_is_verified_through_a_child_playlist_and_media_segment(): void
@@ -385,6 +388,67 @@ class MediaSourceReliabilityTest extends TestCase
                 'preferred_source.health_status',
                 'unknown'
             );
+    }
+
+    public function test_fetched_source_prefers_stored_file_and_keeps_ingestion_url_as_fallback(): void
+    {
+        $movie = Movie::factory()->create([
+            'is_free' => true,
+            'video_url' => 'https://origin.example/archive/original.mp4',
+        ]);
+        $source = $movie->videoSources()->create([
+            'type' => 'fetched',
+            'url' => 'https://origin.example/downloadmp4.php?id=64',
+            'file_path' => 'videos/fetched/long-shadows.mp4',
+            'quality' => '480p',
+            'format' => 'mp4',
+            'media_role' => 'playback_progressive',
+            'health_status' => 'unknown',
+            'is_primary' => true,
+            'is_active' => true,
+        ]);
+
+        $selection = app(MediaSourceSelectionService::class);
+        $urls = $selection->candidateUrls($source);
+
+        $this->assertSame(asset('storage/videos/fetched/long-shadows.mp4'), $urls[0]);
+        $this->assertContains('https://origin.example/downloadmp4.php?id=64', $urls);
+
+        $response = $this->withHeader(config('api.header', 'X-API-KEY'), (string) config('api.key'))
+            ->getJson("/api/v1/player/{$movie->id}?media_type=MOVIE");
+
+        $response->assertOk()
+            ->assertJsonPath('preferred_source.url', asset('storage/videos/fetched/long-shadows.mp4'))
+            ->assertJsonPath('videoUrl', asset('storage/videos/fetched/long-shadows.mp4'));
+
+        $candidateUrls = collect($response->json('source_candidates'))->pluck('url')->all();
+        $this->assertContains('https://origin.example/downloadmp4.php?id=64', $candidateUrls);
+        $this->assertContains('https://origin.example/archive/original.mp4', $candidateUrls);
+    }
+
+    public function test_direct_mkv_source_remains_available_for_browser_clients(): void
+    {
+        $movie = Movie::factory()->create(['is_free' => true]);
+        $source = $movie->videoSources()->create([
+            'type' => 'url',
+            'url' => 'https://usc1.contabostorage.com/account:nbx/videos/faststart/episode.mkv',
+            'quality' => '1080p',
+            'format' => 'mkv',
+            'media_role' => 'playback_progressive',
+            'server_key' => 'contabo',
+            'health_status' => 'unreachable',
+            'is_primary' => true,
+            'is_active' => true,
+        ]);
+
+        $selection = app(MediaSourceSelectionService::class);
+        $candidate = $selection->candidatesFor($movie, 'web')->firstOrFail();
+        $payload = $selection->toCandidate($candidate, true);
+
+        $this->assertSame($source->id, $candidate->id);
+        $this->assertSame($source->url, $payload['url']);
+        $this->assertFalse($payload['browser_compatible']);
+        $this->assertSame('unknown', $payload['health_status']);
     }
 
     public function test_partially_completed_import_without_a_playable_artifact_is_not_a_candidate(): void

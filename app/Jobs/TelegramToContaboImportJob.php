@@ -156,7 +156,7 @@ class TelegramToContaboImportJob implements ShouldQueue
         );
 
         if (! ($result['ok'] ?? false)) {
-            $this->failSource($source->refresh(), (string) ($result['error'] ?? 'Contabo Object Storage upload failed.'), $statusData);
+            $this->failSource($source->refresh(), (string) ($result['error'] ?? 'Object-storage upload failed.'), $statusData);
             return;
         }
 

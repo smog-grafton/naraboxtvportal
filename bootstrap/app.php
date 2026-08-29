@@ -3,6 +3,8 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Auth\AuthenticationException;
+use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -17,26 +19,42 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\HandleCors::class,
         ]);
 
-        $middleware->api(append: [
-            \App\Http\Middleware\TrackOnlinePresence::class,
-        ]);
-
         // Also add CORS to web routes for storage files
         $middleware->web(prepend: [
             \App\Http\Middleware\HandleCors::class,
         ]);
 
-        $middleware->web(append: [
-            \App\Http\Middleware\TrackOnlinePresence::class,
-        ]);
+        $trustedProxies = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('SECURITY_TRUSTED_PROXIES', ''))
+        )));
+        if ($trustedProxies !== []) {
+            $middleware->trustProxies(
+                at: $trustedProxies,
+                headers: Request::HEADER_X_FORWARDED_FOR
+                    | Request::HEADER_X_FORWARDED_HOST
+                    | Request::HEADER_X_FORWARDED_PORT
+                    | Request::HEADER_X_FORWARDED_PROTO
+            );
+        }
 
         // Register middleware aliases
         $middleware->alias([
             'email.verified' => \App\Http\Middleware\EnsureEmailVerified::class,
             'worker.api' => \App\Http\Middleware\AuthenticateWorkerApi::class,
             'app.api_key' => \App\Http\Middleware\ValidateApiKey::class,
+            'platform.operations' => \App\Http\Middleware\EnforcePlatformOperations::class,
+            'account.security' => \App\Http\Middleware\EnforceAccountSecurity::class,
+            'payment.security' => \App\Http\Middleware\EnforcePaymentSecurity::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->render(function (AuthenticationException $exception, Request $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'error' => 'Authentication is required.',
+                    'code' => 'SESSION_REAUTH_REQUIRED',
+                ], 401);
+            }
+        });
     })->create();

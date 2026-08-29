@@ -20,7 +20,8 @@ class WithdrawalService
         private readonly CreatorAccessService $access,
         private readonly IoTeCService $iotecService,
         private readonly CreatorAuditService $audit,
-        private readonly CreatorCommunicationService $communications
+        private readonly CreatorCommunicationService $communications,
+        private readonly PartnerWalletService $partnerWallets
     ) {}
 
     public function requestWithdrawal(
@@ -69,6 +70,7 @@ class WithdrawalService
         }
 
         $hasPending = CreatorWithdrawalRequest::where('user_id', $user->id)
+            ->where('beneficiary_type', 'creator')
             ->whereIn('status', [
                 CreatorWithdrawalRequest::STATUS_PENDING,
                 CreatorWithdrawalRequest::STATUS_UNDER_REVIEW,
@@ -86,6 +88,7 @@ class WithdrawalService
             $reference = 'WDR-'.strtoupper(Str::random(12));
             $request = CreatorWithdrawalRequest::create([
                 'user_id' => $user->id,
+                'beneficiary_type' => 'creator',
                 'payout_method_id' => $payoutMethod->id,
                 'amount' => MoneyService::fromMinor($amountMinor),
                 'amount_minor' => $amountMinor,
@@ -364,7 +367,7 @@ class WithdrawalService
             if ($locked->status === CreatorWithdrawalRequest::STATUS_PAID) {
                 return;
             }
-            $this->wallets->completeReservation($locked->user, $this->amountMinor($locked), $locked->reference);
+            $this->completeReservation($locked);
             $locked->update([
                 'status' => CreatorWithdrawalRequest::STATUS_PAID,
                 'processed_at' => now(),
@@ -401,7 +404,7 @@ class WithdrawalService
             return;
         }
         DB::transaction(function () use ($request, $reason) {
-            $this->wallets->releaseReservation($request->user, $this->amountMinor($request), $request->reference);
+            $this->releaseReservation($request);
             $request->update([
                 'status' => CreatorWithdrawalRequest::STATUS_FAILED,
                 'failure_reason' => $reason,
@@ -430,7 +433,7 @@ class WithdrawalService
             return;
         }
         DB::transaction(function () use ($request, $reason) {
-            $this->wallets->releaseReservation($request->user, $this->amountMinor($request), $request->reference);
+            $this->releaseReservation($request);
             $request->update([
                 'status' => CreatorWithdrawalRequest::STATUS_REJECTED,
                 'failure_reason' => $reason,
@@ -455,7 +458,7 @@ class WithdrawalService
             throw ValidationException::withMessages(['withdrawal' => ['This withdrawal cannot be cancelled.']]);
         }
         DB::transaction(function () use ($request) {
-            $this->wallets->releaseReservation($request->user, $this->amountMinor($request), $request->reference);
+            $this->releaseReservation($request);
             $request->update(['status' => CreatorWithdrawalRequest::STATUS_CANCELLED]);
         });
     }
@@ -463,6 +466,28 @@ class WithdrawalService
     private function amountMinor(CreatorWithdrawalRequest $request): int
     {
         return (int) ($request->amount_minor ?? MoneyService::toMinor((string) $request->amount));
+    }
+
+    private function completeReservation(CreatorWithdrawalRequest $request): void
+    {
+        if ($request->isPartnerWithdrawal()) {
+            $this->partnerWallets->completeReservation($request->user, $this->amountMinor($request), $request->reference);
+
+            return;
+        }
+
+        $this->wallets->completeReservation($request->user, $this->amountMinor($request), $request->reference);
+    }
+
+    private function releaseReservation(CreatorWithdrawalRequest $request): void
+    {
+        if ($request->isPartnerWithdrawal()) {
+            $this->partnerWallets->releaseReservation($request->user, $this->amountMinor($request), $request->reference);
+
+            return;
+        }
+
+        $this->wallets->releaseReservation($request->user, $this->amountMinor($request), $request->reference);
     }
 
     private function iotec(): IoTeCService
@@ -482,10 +507,12 @@ class WithdrawalService
             CreatorWithdrawalRequest::STATUS_PAID,
         ];
         $today = (int) CreatorWithdrawalRequest::where('user_id', $user->id)
+            ->where('beneficiary_type', 'creator')
             ->whereIn('status', $statuses)
             ->whereDate('requested_at', today())
             ->sum('amount_minor');
         $month = (int) CreatorWithdrawalRequest::where('user_id', $user->id)
+            ->where('beneficiary_type', 'creator')
             ->whereIn('status', $statuses)
             ->whereBetween('requested_at', [now()->startOfMonth(), now()->endOfMonth()])
             ->sum('amount_minor');

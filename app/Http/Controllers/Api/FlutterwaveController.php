@@ -3,13 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Movie;
+use App\Models\PaymentGateway;
+use App\Models\PaymentTransaction;
+use App\Models\SubscriptionPlan;
+use App\Models\TVShow;
 use App\Services\FlutterwaveService;
 use App\Services\PaymentApprovalService;
-use App\Models\PaymentTransaction;
-use App\Models\PaymentGateway;
-use App\Models\Movie;
-use App\Models\TVShow;
-use App\Models\SubscriptionPlan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -35,7 +35,7 @@ class FlutterwaveController extends Controller
     public function initiate(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -55,7 +55,7 @@ class FlutterwaveController extends Controller
             ->where('is_active', true)
             ->first();
 
-        if (!$gateway) {
+        if (! $gateway) {
             return response()->json(['error' => 'Flutterwave gateway is not available'], 400);
         }
 
@@ -70,7 +70,7 @@ class FlutterwaveController extends Controller
                 : TVShow::findOrFail($request->media_id);
 
             $transactionable = $media;
-            $amount = $request->type === 'RENT' 
+            $amount = $request->type === 'RENT'
                 ? ($media->price_rent ?? 0)
                 : ($media->price_buy ?? 0);
         } elseif ($request->type === 'SUBSCRIPTION') {
@@ -83,7 +83,7 @@ class FlutterwaveController extends Controller
         }
 
         // Generate unique transaction reference
-        $txRef = 'NBX-FLW-' . strtoupper(Str::random(12)) . '-' . time();
+        $txRef = 'NBX-FLW-'.strtoupper(Str::random(12)).'-'.time();
 
         // Create transaction record (meta.return_url for redirect after success)
         $transaction = PaymentTransaction::create([
@@ -99,11 +99,14 @@ class FlutterwaveController extends Controller
             'status' => 'PENDING',
             'meta' => $meta,
         ]);
+        app(\App\Services\PartnerBenefitService::class)->applyFirstPaymentDiscount($transaction->load('user', 'transactionable'));
+        $transaction->refresh();
+        $amount = (float) $transaction->amount;
 
         // Prepare Flutterwave payload
         $frontendUrl = config('app.frontend_url', env('FRONTEND_URL', 'http://localhost:3000'));
-        $redirectUrl = rtrim($frontendUrl, '/') . '/payment/callback?tx_ref=' . urlencode($txRef);
-        
+        $redirectUrl = rtrim($frontendUrl, '/').'/payment/callback?tx_ref='.urlencode($txRef);
+
         // Format phone number for Mobile Money Uganda (required format: 256XXXXXXXXX)
         $phoneNumber = $user->phone;
         if ($phoneNumber) {
@@ -111,7 +114,7 @@ class FlutterwaveController extends Controller
             $phoneNumber = preg_replace('/[^0-9+]/', '', $phoneNumber);
             // If starts with 0, replace with 256
             if (strpos($phoneNumber, '0') === 0) {
-                $phoneNumber = '256' . substr($phoneNumber, 1);
+                $phoneNumber = '256'.substr($phoneNumber, 1);
             }
             // If starts with +256, remove the +
             if (strpos($phoneNumber, '+256') === 0) {
@@ -119,10 +122,10 @@ class FlutterwaveController extends Controller
             }
             // If doesn't start with 256, add it
             if (strpos($phoneNumber, '256') !== 0) {
-                $phoneNumber = '256' . $phoneNumber;
+                $phoneNumber = '256'.$phoneNumber;
             }
         }
-        
+
         $paymentData = [
             'tx_ref' => $txRef,
             'amount' => $amount,
@@ -151,7 +154,7 @@ class FlutterwaveController extends Controller
         // Call Flutterwave API
         $result = $this->flutterwaveService->initiatePayment($paymentData);
 
-        if (!$result['success']) {
+        if (! $result['success']) {
             $transaction->update([
                 'status' => 'FAILED',
                 'gateway_response' => $result,
@@ -177,6 +180,8 @@ class FlutterwaveController extends Controller
             'checkout_url' => $result['link'],
             'public_key' => $this->flutterwaveService->getPublicKey(),
             'amount' => $amount,
+            'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+            'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
             'currency' => 'UGX',
         ]);
     }
@@ -187,7 +192,7 @@ class FlutterwaveController extends Controller
     public function verify(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -200,12 +205,16 @@ class FlutterwaveController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if (!$transaction) {
+        if (! $transaction) {
             return response()->json(['error' => 'Transaction not found'], 404);
         }
 
         // If transaction already verified, return success with redirect_url
         if ($transaction->status === 'SUCCESS') {
+            if (! $transaction->access_granted_at) {
+                PaymentApprovalService::grantAccess($transaction);
+            }
+
             return response()->json([
                 'success' => true,
                 'status' => 'SUCCESS',
@@ -221,14 +230,14 @@ class FlutterwaveController extends Controller
         // Verify with Flutterwave
         $transactionId = $request->transaction_id ?? $transaction->gateway_transaction_id;
         $verification = null;
-        
+
         // Try transaction ID verification first
         if ($transactionId) {
             $verification = $this->flutterwaveService->verifyTransaction($transactionId);
         }
-        
+
         // If transaction ID verification fails or not available, try tx_ref verification
-        if (!$verification || !$verification['success']) {
+        if (! $verification || ! $verification['success']) {
             $verification = $this->flutterwaveService->verifyByTxRef($request->transaction_ref);
         }
 
@@ -236,7 +245,7 @@ class FlutterwaveController extends Controller
         $gateway = $transaction->paymentGateway;
         $isAutomatedGateway = $gateway && $gateway->type === 'AUTOMATIC';
 
-        if (!$verification || !$verification['success']) {
+        if (! $verification || ! $verification['success']) {
             // For automated gateways, mark as FAILED immediately if verification fails
             // Only keep PENDING for manual gateways (which require admin approval)
             if ($isAutomatedGateway) {
@@ -278,11 +287,11 @@ class FlutterwaveController extends Controller
         }
 
         // Check if payment was actually successful
-        if (!$verification['verified']) {
+        if (! $verification['verified']) {
             // Check verification status for cancelled/failed states
             $verificationStatus = strtolower($verification['status'] ?? '');
             $isCancelledOrFailed = in_array($verificationStatus, ['cancelled', 'failed', 'expired', 'reversed', 'abandoned']);
-            
+
             // For automated gateways, mark as FAILED immediately if cancelled/failed
             // Manual gateways stay PENDING for admin approval
             if ($isAutomatedGateway) {
@@ -390,31 +399,49 @@ class FlutterwaveController extends Controller
      */
     public function webhook(Request $request)
     {
+        $secretHash = (string) config('services.flutterwave.webhook_secret_hash', '');
+        $legacySignature = (string) $request->header('verif-hash');
+        $hmacSignature = (string) $request->header('flutterwave-signature');
+        $expectedHmac = $secretHash !== '' ? base64_encode(hash_hmac('sha256', $request->getContent(), $secretHash, true)) : '';
+        if ($secretHash === '' || ! (($legacySignature !== '' && hash_equals($secretHash, $legacySignature))
+            || ($hmacSignature !== '' && hash_equals($expectedHmac, $hmacSignature)))) {
+            return response()->json(['error' => 'Invalid webhook signature'], 401);
+        }
+
         $payload = $request->all();
-        
+
         // Verify webhook signature (if implemented by Flutterwave)
         // For now, we'll verify the transaction
-        
-        if (!isset($payload['data']['tx_ref'])) {
+
+        if (! isset($payload['data']['tx_ref'])) {
             return response()->json(['error' => 'Invalid webhook payload'], 400);
         }
 
         $txRef = $payload['data']['tx_ref'];
         $transaction = PaymentTransaction::where('transaction_ref', $txRef)->first();
 
-        if (!$transaction) {
+        if (! $transaction) {
             return response()->json(['error' => 'Transaction not found'], 404);
         }
 
         // If already processed, return success
         if ($transaction->status === 'SUCCESS') {
+            if (! $transaction->access_granted_at) {
+                PaymentApprovalService::grantAccess($transaction);
+            }
+
             return response()->json(['status' => 'success', 'message' => 'Already processed']);
         }
 
         // Verify the transaction
         $verification = $this->flutterwaveService->verifyTransaction($payload['data']['id']);
 
-        if ($verification['success'] && $verification['verified']) {
+        $matchesTransaction = ($verification['tx_ref'] ?? null) === $transaction->transaction_ref
+            && abs((float) ($verification['amount'] ?? 0) - (float) $transaction->amount) <= 0.01
+            && strtoupper((string) ($verification['currency'] ?? '')) === 'UGX'
+            && strtolower((string) $transaction->paymentGateway?->slug) === 'flutterwave';
+
+        if ($verification['success'] && $verification['verified'] && $matchesTransaction) {
             $transaction->update([
                 'status' => 'SUCCESS',
                 'gateway_transaction_id' => $payload['data']['id'],
@@ -437,7 +464,7 @@ class FlutterwaveController extends Controller
                 ]),
                 'raw_callback' => $payload,
                 'raw_response' => $verification,
-                'failure_reason' => $verification['message'] ?? 'Payment verification failed',
+                'failure_reason' => $matchesTransaction ? ($verification['message'] ?? 'Payment verification failed') : 'Provider transaction details did not match.',
             ]);
         }
 
@@ -459,9 +486,11 @@ class FlutterwaveController extends Controller
         $host = $parsed['host'] ?? null;
         if ($host && strtolower($host) === strtolower($frontendHost)) {
             $path = $parsed['path'] ?? '/';
-            $query = isset($parsed['query']) ? '?' . $parsed['query'] : '';
-            return $path . $query;
+            $query = isset($parsed['query']) ? '?'.$parsed['query'] : '';
+
+            return $path.$query;
         }
+
         return null;
     }
 
@@ -472,6 +501,7 @@ class FlutterwaveController extends Controller
         if ($returnUrl && str_starts_with($returnUrl, '/') && ! str_starts_with($returnUrl, '//')) {
             return $returnUrl;
         }
+
         return null;
     }
 
@@ -481,14 +511,13 @@ class FlutterwaveController extends Controller
     private function getPaymentDescription(string $type, $transactionable = null, $subscriptionPlan = null): string
     {
         if ($type === 'RENT' && $transactionable) {
-            return 'Rent: ' . $transactionable->title;
+            return 'Rent: '.$transactionable->title;
         } elseif ($type === 'BUY' && $transactionable) {
-            return 'Purchase: ' . $transactionable->title;
+            return 'Purchase: '.$transactionable->title;
         } elseif ($type === 'SUBSCRIPTION' && $subscriptionPlan) {
-            return 'Subscription: ' . $subscriptionPlan->name;
+            return 'Subscription: '.$subscriptionPlan->name;
         }
 
         return 'NaraBox Payment';
     }
 }
-

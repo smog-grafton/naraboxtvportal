@@ -19,6 +19,7 @@ Schedule::command('pawapay:reconcile-pending')->everyFiveMinutes();
 
 // Mark creator earnings available (after hold period) daily
 Schedule::command('creator:mark-earnings-available')->daily();
+Schedule::command('partner:mark-earnings-available')->daily();
 Schedule::command('creator:reconcile-withdrawals --limit=100')
     ->name('creator:reconcile-withdrawals')
     ->withoutOverlapping()
@@ -27,6 +28,11 @@ Schedule::command('creator:cleanup-evidence --limit=500')
     ->name('creator:cleanup-evidence')
     ->withoutOverlapping()
     ->dailyAt('02:30');
+
+Schedule::command('operations:expire')
+    ->name('operations:expire')
+    ->withoutOverlapping()
+    ->everyMinute();
 
 Artisan::command('cdn:sync-playback-readiness {--limit=300 : Maximum CDN-backed sourceables to inspect} {--queue-missing : Ask CDN to queue optimization when HLS is missing} {--force : Ignore readiness check TTL}', function () {
     $limit = max(1, (int) $this->option('limit'));

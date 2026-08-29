@@ -3,14 +3,14 @@
 namespace Tests\Unit;
 
 use App\Services\ContaboObjectStorageService;
-use PHPUnit\Framework\TestCase;
 use ReflectionClass;
+use Tests\TestCase;
 
 class ContaboObjectStorageServiceTest extends TestCase
 {
     public function test_it_replaces_embedded_domains_in_generated_filenames(): void
     {
-        $service = new ContaboObjectStorageService();
+        $service = app(ContaboObjectStorageService::class);
         $reflection = new ReflectionClass($service);
         $method = $reflection->getMethod('filenameFromUrl');
         $method->setAccessible(true);

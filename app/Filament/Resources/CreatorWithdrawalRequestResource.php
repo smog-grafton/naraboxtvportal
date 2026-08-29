@@ -27,8 +27,14 @@ class CreatorWithdrawalRequestResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('user.name')
-                    ->label('Creator')
+                    ->label('Beneficiary')
                     ->searchable()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('beneficiary_type')
+                    ->label('Type')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => ucfirst($state ?: 'creator'))
+                    ->color(fn (?string $state): string => $state === 'partner' ? 'success' : 'gray')
                     ->sortable(),
                 Tables\Columns\TextColumn::make('amount')
                     ->label('Amount')
@@ -73,6 +79,11 @@ class CreatorWithdrawalRequestResource extends Resource
                         'failed' => 'Failed',
                         'rejected' => 'Rejected',
                         'cancelled' => 'Cancelled',
+                    ]),
+                Tables\Filters\SelectFilter::make('beneficiary_type')
+                    ->options([
+                        'creator' => 'Creator',
+                        'partner' => 'Partner',
                     ]),
             ])
             ->actions([

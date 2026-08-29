@@ -6,6 +6,8 @@ use App\Filament\Resources\PaymentTransactionResource\Pages;
 use App\Models\PaymentTransaction;
 use App\Services\PawaPayService;
 use App\Services\PaymentApprovalService;
+use App\Models\ProtectedPayer;
+use App\Services\AccountSecurityService;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
@@ -79,6 +81,10 @@ class PaymentTransactionResource extends Resource
                     ->maxLength(255),
                 Forms\Components\TextInput::make('provider_code')
                     ->maxLength(255),
+                Forms\Components\TextInput::make('payer_phone')->disabled()->dehydrated(false),
+                Forms\Components\TextInput::make('payment_ip')->disabled()->dehydrated(false),
+                Forms\Components\TextInput::make('device_id')->disabled()->dehydrated(false),
+                Forms\Components\TextInput::make('risk_level')->disabled()->dehydrated(false),
                 Forms\Components\TextInput::make('failure_reason')
                     ->maxLength(255),
                 Forms\Components\Textarea::make('notes')
@@ -112,6 +118,7 @@ class PaymentTransactionResource extends Resource
                     ->label('User')
                     ->searchable()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('user.email')->label('Email')->searchable()->toggleable(),
                 Tables\Columns\TextColumn::make('subscriptionPlan.name')
                     ->label('Plan')
                     ->visible(fn ($record) => $record?->type === 'SUBSCRIPTION')
@@ -139,6 +146,11 @@ class PaymentTransactionResource extends Resource
                 Tables\Columns\TextColumn::make('provider_code')
                     ->label('Provider')
                     ->toggleable(),
+                Tables\Columns\TextColumn::make('payer_phone')->label('Payer')->searchable()->copyable(),
+                Tables\Columns\TextColumn::make('payment_ip')->label('Payment IP')->searchable()->copyable()->toggleable(),
+                Tables\Columns\TextColumn::make('device_id')->label('Device')->searchable()->limit(16)->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('risk_level')->label('Risk')->badge()->color(fn (?string $state) => match ($state) { 'CRITICAL' => 'danger', 'HIGH' => 'warning', default => 'gray' }),
+                Tables\Columns\TextColumn::make('user.account_status')->label('Account')->badge()->toggleable(),
                 Tables\Columns\TextColumn::make('amount')
                     ->label('Amount')
                     ->money('UGX')
@@ -172,6 +184,9 @@ class PaymentTransactionResource extends Resource
                 Tables\Filters\SelectFilter::make('payment_gateway_id')
                     ->label('Gateway')
                     ->relationship('paymentGateway', 'display_name'),
+                Tables\Filters\SelectFilter::make('risk_level')->options(array_combine(['NORMAL', 'WATCH', 'ELEVATED', 'HIGH', 'CRITICAL'], ['Normal', 'Watch', 'Elevated', 'High', 'Critical'])),
+                Tables\Filters\SelectFilter::make('account_status')->query(fn ($query, array $data) => filled($data['value'] ?? null) ? $query->whereHas('user', fn ($q) => $q->where('account_status', $data['value'])) : $query)
+                    ->options(array_combine(['ACTIVE', 'PAYMENT_RESTRICTED', 'SUSPENDED', 'BANNED'], ['Active', 'Payment restricted', 'Suspended', 'Banned'])),
             ])
             ->actions([
                 Tables\Actions\Action::make('recheck_pawapay')
@@ -204,12 +219,24 @@ class PaymentTransactionResource extends Resource
                     }),
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('restrict_user')
+                    ->label('Restrict User')->icon('heroicon-o-no-symbol')->color('warning')->requiresConfirmation()
+                    ->visible(fn (PaymentTransaction $record) => $record->user?->account_status === 'ACTIVE' && ! $record->user?->isAdmin())
+                    ->form([Forms\Components\Textarea::make('reason')->required(), Forms\Components\Textarea::make('notes')])
+                    ->action(function (PaymentTransaction $record, array $data): void {
+                        app(AccountSecurityService::class)->restrictPayments($record->user, $data['reason'], $data['notes'] ?? null, 'MANUAL', auth()->user());
+                        Notification::make()->title('User payment-restricted')->warning()->send();
+                    }),
+                Tables\Actions\Action::make('protect_payer')
+                    ->label('Protect Payer')->icon('heroicon-o-phone-x-mark')->color('danger')->requiresConfirmation()
+                    ->visible(fn (PaymentTransaction $record) => filled($record->payer_phone))
+                    ->form([Forms\Components\Select::make('reason')->options(['OWNER_REPORTED_UNAUTHORIZED' => 'Owner reported unauthorized', 'SUSPECTED_ABUSE_TARGET' => 'Suspected abuse target', 'CONFIRMED_ABUSE_TARGET' => 'Confirmed abuse target', 'FRAUD_INVESTIGATION' => 'Fraud investigation', 'ADMIN_BLOCK' => 'Admin block'])->required(), Forms\Components\Textarea::make('notes')])
+                    ->action(function (PaymentTransaction $record, array $data): void {
+                        ProtectedPayer::updateOrCreate(['normalized_phone' => $record->payer_phone], ['status' => 'ACTIVE', 'reason' => $data['reason'], 'notes' => $data['notes'] ?? null, 'created_by' => auth()->id()]);
+                        Notification::make()->title('Payer protected')->success()->send();
+                    }),
             ])
-            ->bulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
-                ]),
-            ])
+            ->bulkActions([])
             ->defaultSort('created_at', 'desc');
     }
 

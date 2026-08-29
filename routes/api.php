@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\ActorController;
 use App\Http\Controllers\Api\ArticleController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BannerController;
+use App\Http\Controllers\Api\BootstrapController;
 use App\Http\Controllers\Api\CdnFetchProxyController;
 use App\Http\Controllers\Api\CmsPageController;
 use App\Http\Controllers\Api\CommentController;
@@ -36,15 +37,20 @@ use App\Http\Controllers\Api\MediaLibraryController;
 use App\Http\Controllers\Api\MovieController;
 use App\Http\Controllers\Api\NbxStorageEventController;
 use App\Http\Controllers\Api\NbxWebhookController;
+use App\Http\Controllers\Api\Partner\PartnerController;
+use App\Http\Controllers\Api\PartnerBenefitController;
+use App\Http\Controllers\Api\Partner\PartnerPayoutController;
 use App\Http\Controllers\Api\PawaPayController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\PlaybackReportController;
 use App\Http\Controllers\Api\PlayerController;
+use App\Http\Controllers\Api\PresenceController;
 use App\Http\Controllers\Api\PushDeviceController;
 use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SubtitleFetchController;
 use App\Http\Controllers\Api\TelegramIngestNotifyController;
+use App\Http\Controllers\Api\TrendingController;
 use App\Http\Controllers\Api\TvController;
 use App\Http\Controllers\Api\TVShowController;
 use App\Http\Controllers\Api\UserNotificationController;
@@ -103,10 +109,14 @@ Route::post('/v1/worker/sync', [WorkerSyncController::class, 'sync'])
     ->middleware(['worker.api', 'throttle:60,1']);
 
 // Public API routes (app-facing; protected by API key middleware when enabled)
-Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
+Route::prefix('v1')->middleware(['app.api_key', 'platform.operations'])->group(function () {
+    Route::get('/bootstrap', BootstrapController::class)->middleware('throttle:120,1');
+    Route::post('/presence/heartbeat', [PresenceController::class, 'heartbeat'])
+        ->middleware('throttle:20,1');
     // Authentication routes
     Route::post('/auth/register', [AuthController::class, 'register']);
     Route::post('/auth/login', [AuthController::class, 'login']);
+    Route::post('/auth/refresh', [AuthController::class, 'refresh']);
     Route::post('/auth/phone/request-otp', [AuthController::class, 'requestPhoneOtp']);
     Route::post('/auth/phone/verify-otp', [AuthController::class, 'verifyPhoneOtp']);
     Route::post('/auth/google/mobile', [AuthController::class, 'googleMobile']);
@@ -121,7 +131,12 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
     Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
     Route::post('/tv/auth/device-code', [TvController::class, 'issueDeviceCode']);
     Route::post('/tv/auth/device-code/poll', [TvController::class, 'pollDeviceCode']);
+    Route::post('/tv/auth/device-code/inspect', [TvController::class, 'inspectDeviceCode'])
+        ->middleware('throttle:30,1');
     Route::get('/tv/home', [TvController::class, 'home']);
+
+    // Shared time-windowed ranking for web, mobile, and TV clients.
+    Route::get('/trending', TrendingController::class)->middleware('throttle:120,1');
 
     // Hero section
     Route::get('/hero', [HeroController::class, 'index']);
@@ -170,6 +185,18 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
     // VJs
     Route::get('/vjs', [VJController::class, 'index']);
     Route::get('/vjs/{id}', [VJController::class, 'show']);
+
+    // Public partner referral resolution. The frontend stores the returned
+    // attribution context until the viewer completes registration.
+    Route::get('/partners/discovery', [PartnerController::class, 'discovery'])
+        ->middleware('throttle:120,1');
+    Route::get('/partners/referral-code-assistance', [PartnerController::class, 'referralCodeAssistance'])
+        ->middleware('throttle:60,1');
+    Route::get('/partner/referral/{code}', [PartnerController::class, 'resolve'])
+        ->where('code', '[A-Za-z0-9_-]+');
+    Route::post('/partner/referral/{code}/visit', [PartnerController::class, 'visit'])
+        ->where('code', '[A-Za-z0-9_-]+')
+        ->middleware('throttle:30,1');
 
     // Media Libraries (creator channels)
     Route::get('/media-libraries', [MediaLibraryController::class, 'index']);
@@ -235,10 +262,11 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
     Route::get('/creator/onboarding/options', [CreatorController::class, 'options']);
 
     // Protected routes (require authentication)
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'account.security'])->group(function () {
         // Auth
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::put('/auth/profile', [AuthController::class, 'updateProfile']);
+        Route::post('/auth/change-password', [AuthController::class, 'changePassword']);
         Route::delete('/auth/account', [AuthController::class, 'deleteAccount']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::post('/auth/web-bridge-token', [AuthController::class, 'issueWebBridgeToken']);
@@ -356,31 +384,57 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
             Route::delete('/withdrawals/{id}', [CreatorWithdrawalController::class, 'destroy']);
         });
 
+        // Partner business portal. Financial values are returned by Laravel;
+        // clients never calculate commissions locally.
+        Route::prefix('partner')->group(function () {
+            Route::get('/application', [PartnerController::class, 'application']);
+            Route::post('/application', [PartnerController::class, 'apply']);
+            Route::post('/attribute', [PartnerController::class, 'attribute']);
+            Route::get('/dashboard', [PartnerController::class, 'dashboard']);
+            Route::get('/analytics', [PartnerController::class, 'analytics']);
+            Route::get('/referrals', [PartnerController::class, 'referrals']);
+            Route::get('/transactions', [PartnerController::class, 'transactions']);
+            Route::get('/earnings', [PartnerController::class, 'earnings']);
+            Route::get('/profile', [PartnerController::class, 'profile']);
+            Route::post('/profile', [PartnerController::class, 'updateProfile'])
+                ->middleware('throttle:10,1');
+            Route::get('/benefits', [PartnerController::class, 'benefits']);
+            Route::put('/benefits/{code}', [PartnerController::class, 'updateBenefit'])
+                ->where('code', '[A-Za-z0-9_-]+')
+                ->middleware('throttle:20,1');
+            Route::match(['get', 'post'], '/campaigns', [PartnerController::class, 'campaigns']);
+            Route::post('/benefits/first-movie-free/claim', [PartnerBenefitController::class, 'claimFirstMovie'])
+                ->middleware('throttle:10,1');
+            Route::get('/payout-methods', [PartnerPayoutController::class, 'methods']);
+            Route::post('/payout-methods', [PartnerPayoutController::class, 'storeMethod']);
+            Route::get('/withdrawals', [PartnerPayoutController::class, 'withdrawals']);
+            Route::post('/withdrawals', [PartnerPayoutController::class, 'requestWithdrawal']);
+            Route::delete('/withdrawals/{id}', [PartnerPayoutController::class, 'cancelWithdrawal'])
+                ->whereNumber('id');
+        });
+
         // Dashboard
         Route::get('/dashboard', [DashboardController::class, 'index']);
 
         // Payments (require email verification)
         Route::middleware('email.verified')->group(function () {
-            Route::post('/payments/initiate', [PaymentController::class, 'initiate']);
+            Route::post('/payments/initiate', [PaymentController::class, 'initiate'])->middleware('payment.security');
             Route::post('/payments/upload-proof', [PaymentController::class, 'uploadProof']);
             Route::post('/payments/verify', [PaymentController::class, 'verify']);
 
             // Flutterwave routes
-            Route::post('/flutterwave/initiate', [FlutterwaveController::class, 'initiate']);
+            Route::post('/flutterwave/initiate', [FlutterwaveController::class, 'initiate'])->middleware('payment.security');
             Route::post('/flutterwave/verify', [FlutterwaveController::class, 'verify']);
 
             // ioTec Pay routes (in-site phone prompt)
-            Route::post('/iotec/initiate', [IoTeCController::class, 'initiate']);
+            Route::post('/iotec/initiate', [IoTeCController::class, 'initiate'])->middleware('payment.security');
             Route::get('/iotec/status', [IoTeCController::class, 'status']);
             Route::post('/iotec/status', [IoTeCController::class, 'status']);
 
             // PawaPay routes (in-site mobile money deposit)
-            Route::post('/payments/pawapay/deposit/initiate', [PawaPayController::class, 'initiateDeposit']);
+            Route::post('/payments/pawapay/deposit/initiate', [PawaPayController::class, 'initiateDeposit'])->middleware('payment.security');
             Route::get('/payments/pawapay/deposit/{depositId}/status', [PawaPayController::class, 'checkDepositStatus']);
         });
-
-        // Flutterwave webhook (no auth required, but should verify signature)
-        Route::post('/flutterwave/webhook', [FlutterwaveController::class, 'webhook']);
 
         // Watch history
         Route::post('/watch-history', [PlayerController::class, 'updateHistory']);
@@ -398,10 +452,18 @@ Route::prefix('v1')->middleware(['app.api_key'])->group(function () {
         Route::delete('/comments/{id}', [CommentController::class, 'destroy']);
     });
 
-    // ioTec callback uses the provider-configured X-Webhook-Token/Bearer secret.
-    Route::post('/iotec/webhook', [IoTeCController::class, 'webhook'])->middleware('throttle:120,1');
+});
 
-    // PawaPay webhooks (no auth - callback from pawaPay)
-    Route::post('/webhooks/pawapay/deposits', [PawaPayController::class, 'depositWebhook'])->middleware('throttle:120,1');
-    Route::post('/webhooks/pawapay/refunds', [PawaPayController::class, 'refundWebhook'])->middleware('throttle:60,1');
+// Provider callbacks use provider-specific signatures/tokens. They intentionally
+// sit outside the public-client API-key and customer-session middleware because
+// payment providers cannot send NaraBox client credentials.
+Route::prefix('v1')->group(function () {
+    Route::post('/flutterwave/webhook', [FlutterwaveController::class, 'webhook'])
+        ->middleware('throttle:120,1');
+    Route::post('/iotec/webhook', [IoTeCController::class, 'webhook'])
+        ->middleware('throttle:120,1');
+    Route::post('/webhooks/pawapay/deposits', [PawaPayController::class, 'depositWebhook'])
+        ->middleware('throttle:120,1');
+    Route::post('/webhooks/pawapay/refunds', [PawaPayController::class, 'refundWebhook'])
+        ->middleware('throttle:60,1');
 });

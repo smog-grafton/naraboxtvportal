@@ -16,7 +16,7 @@ class SeoController extends Controller
      */
     private function getBaseUrl(): string
     {
-        return config('app.url', 'https://naraboxtv.com');
+        return rtrim((string) config('app.frontend_url', 'https://naraboxtv.com'), '/');
     }
 
     /**
@@ -35,7 +35,7 @@ class SeoController extends Controller
 
         // If it starts with /storage, it's a storage file
         if (str_starts_with($path, '/storage/')) {
-            return $this->getBaseUrl() . $path;
+            return rtrim((string) config('app.url'), '/') . $path;
         }
 
         // If it starts with /, it's a public asset
@@ -44,7 +44,7 @@ class SeoController extends Controller
         }
 
         // Otherwise, assume it's a storage file
-        return $this->getBaseUrl() . '/storage/' . $path;
+        return rtrim((string) config('app.url'), '/') . '/storage/' . ltrim($path, '/');
     }
 
     /**
@@ -53,7 +53,7 @@ class SeoController extends Controller
     private function cleanDescription(?string $description, int $maxLength = 160): string
     {
         if (empty($description)) {
-            return 'Watch movies and TV shows on NaraBox TV. Stream or download English films and Ugandan VJ-translated movies.';
+            return 'Watch and download VJ-translated movies and TV shows on NaraBox TV, including Luganda titles and archives from Ugandan VJs.';
         }
 
         // Strip HTML tags
@@ -108,32 +108,18 @@ class SeoController extends Controller
             abort(404);
         }
 
-        // Build meta title
-        $verb = $movie->download_enabled ? 'Watch and download' : 'Watch';
-        $title = "{$verb} {$movie->title}";
-
         $hasVj = $movie->vj_id && $movie->vj;
-        if ($hasVj) {
-            $title .= " - By {$movie->vj->name}";
-            if ($movie->is_free) {
-                $title .= " - For free";
-            }
-        } elseif ($movie->is_free) {
-            $title .= " - For free";
-        }
-
-        $title .= " on NaraBox TV";
-        
-        // Ensure title is ≤ 60 characters
-        if (strlen($title) > 60) {
-            $title = substr($title, 0, 57) . '...';
-        }
-
-        // Meta description
-        $description = $this->cleanDescription($movie->description, 160);
+        $title = $hasVj
+            ? "{$movie->title} – {$movie->vj->name} Translated Movie | NaraBox TV"
+            : "{$movie->title} Movie | NaraBox TV";
+        $title = Str::limit($title, 60, '...');
+        $lead = $hasVj
+            ? "Watch {$movie->title}, translated by {$movie->vj->name}, on NaraBox TV."
+            : "Watch {$movie->title} on NaraBox TV.";
+        $description = $this->cleanDescription($lead.' '.$movie->description, 160);
 
         // OG Image
-        $ogImage = $this->getImageUrl($movie->backdrop);
+        $ogImage = $this->getImageUrl($movie->backdrop ?: $movie->thumbnail);
 
         // Canonical URL - use /movies/ to match Next.js route structure
         $canonical = $this->getBaseUrl() . "/movies/{$slug}";
@@ -163,35 +149,21 @@ class SeoController extends Controller
             abort(404);
         }
 
-        // Build meta title
-        $verb = $tvShow->download_enabled ? 'Watch and download' : 'Watch';
-        $title = "{$verb} {$tvShow->title} TV Series";
-
         $hasVj = $tvShow->vj_id && $tvShow->vj;
-        if ($hasVj) {
-            $title .= " - By {$tvShow->vj->name}";
-            if ($tvShow->is_free) {
-                $title .= " - For free";
-            }
-        } elseif ($tvShow->is_free) {
-            $title .= " - For free";
-        }
-
-        $title .= " on NaraBox TV";
-
-        // Ensure title is ≤ 60 characters
-        if (strlen($title) > 60) {
-            $title = substr($title, 0, 57) . '...';
-        }
-
-        // Meta description
-        $description = $this->cleanDescription($tvShow->description, 160);
+        $title = $hasVj
+            ? "{$tvShow->title} – {$tvShow->vj->name} Translated Series | NaraBox TV"
+            : "{$tvShow->title} TV Series | NaraBox TV";
+        $title = Str::limit($title, 60, '...');
+        $lead = $hasVj
+            ? "Watch {$tvShow->title}, a VJ-translated series by {$tvShow->vj->name}, on NaraBox TV."
+            : "Watch {$tvShow->title} on NaraBox TV.";
+        $description = $this->cleanDescription($lead.' '.$tvShow->description, 160);
 
         // OG Image
-        $ogImage = $this->getImageUrl($tvShow->backdrop);
+        $ogImage = $this->getImageUrl($tvShow->backdrop ?: $tvShow->thumbnail);
 
         // Canonical URL
-        $canonical = $this->getBaseUrl() . "/tv/{$slug}";
+        $canonical = $this->getBaseUrl() . "/tv-shows/{$slug}";
 
         return view('seo.page', [
             'title' => $title,
@@ -224,19 +196,11 @@ class SeoController extends Controller
         // Use the VJ's slug for canonical URL (not the input parameter)
         $vjSlug = $vj->slug;
 
-        // Build meta title
-        $title = "{$vj->name} – Luganda Movie Translations on NaraBox TV";
-        
-        // Ensure title is ≤ 60 characters
-        if (strlen($title) > 60) {
-            $title = substr($title, 0, 57) . '...';
-        }
-
-        // Meta description
-        $description = $this->cleanDescription($vj->bio, 160);
-        if (empty($description)) {
-            $description = "Watch {$vj->name}'s Luganda translated movies and TV shows on NaraBox TV. Stream or download VJ-translated content.";
-        }
+        $title = Str::limit("{$vj->name} Translated Movies & TV Shows | NaraBox TV", 60, '...');
+        $description = $this->cleanDescription(
+            "Browse {$vj->name}'s VJ-translated movies and TV shows on NaraBox TV. ".($vj->bio ?? ''),
+            160
+        );
 
         // OG Image - use banner if available, otherwise image
         $ogImage = $this->getImageUrl($vj->banner ?: $vj->image);
@@ -260,9 +224,10 @@ class SeoController extends Controller
      */
     public function vjs()
     {
-        $vjCount = VJ::where('is_active', true)->count();
-        $title = "VJ Masters – Luganda Movie Translators | NaraBox TV";
-        $description = "Meet the Video Jockey (VJ) masters who bring global cinema to local hearts. Discover VJ Junior, VJ Emmy, VJ Jingo, and other expert Luganda translators who make movies accessible to Ugandan audiences.";
+        $names = VJ::where('is_active', true)->orderByDesc('is_featured')->limit(4)->pluck('name')->implode(', ');
+        $archiveNames = $names !== '' ? $names : 'Ugandan VJs';
+        $title = "Ugandan VJs & Translated Movie Archives | NaraBox TV";
+        $description = $this->cleanDescription("Browse VJ-translated movie and TV-show archives from {$archiveNames} on NaraBox TV, with latest, trending, and top-rated titles.");
         $canonical = $this->getBaseUrl() . "/vjs";
         $ogImage = $this->getBaseUrl() . "/assets/images/meta/metaog.jpeg";
 
@@ -271,7 +236,7 @@ class SeoController extends Controller
             'description' => $description,
             'ogType' => 'website',
             'ogImage' => $ogImage,
-            'ogImageAlt' => 'NaraBox TV VJ Masters',
+            'ogImageAlt' => 'NaraBox TV VJ translated-movie archives',
             'canonical' => $canonical,
             'twitterCard' => 'summary_large_image',
         ]);
@@ -485,9 +450,8 @@ class SeoController extends Controller
      */
     public function movies()
     {
-        $movieCount = Movie::where('is_active', true)->count();
-        $title = "Movies – Watch & Download Latest Films | NaraBox TV";
-        $description = "Browse and watch the latest movies on NaraBox TV. Stream or download English films, action movies, comedies, dramas, and popular Ugandan VJ-translated movies. Over {$movieCount}+ movies available.";
+        $title = "VJ Translated Movies & Luganda Films | NaraBox TV";
+        $description = "Watch and download VJ-translated movies on NaraBox TV. Browse Luganda translated movies, latest releases, trending titles, and archives by Ugandan VJs.";
         $canonical = $this->getBaseUrl() . "/movies";
         $ogImage = $this->getBaseUrl() . "/assets/images/meta/metaog.jpeg";
 
@@ -507,9 +471,8 @@ class SeoController extends Controller
      */
     public function tvShows()
     {
-        $tvShowCount = TVShow::where('is_active', true)->count();
-        $title = "TV Shows – Watch & Stream Series | NaraBox TV";
-        $description = "Browse and watch TV shows and series on NaraBox TV. Stream or download English TV series, dramas, comedies, and popular Ugandan VJ-translated shows. Multiple seasons and episodes available.";
+        $title = "VJ Translated TV Shows & Series | NaraBox TV";
+        $description = "Watch and download VJ-translated TV shows and series on NaraBox TV. Explore Luganda translated series, trending shows, seasons, and VJ archives.";
         $canonical = $this->getBaseUrl() . "/tv-shows";
         $ogImage = $this->getBaseUrl() . "/assets/images/meta/metaog.jpeg";
 

@@ -53,6 +53,26 @@ class CreatorFormOptionsController extends CreatorBaseController
                     ['value' => 'telegram', 'label' => 'Telegram post link', 'enabled' => true],
                     ['value' => 'remote', 'label' => 'Direct download URL', 'enabled' => true],
                 ],
+                'storage_targets' => collect(config('storage_targets.targets', []))
+                    ->map(fn (array $target, string $key) => [
+                        'value' => $key,
+                        'label' => (string) ($target['label'] ?? $key),
+                        'provider' => $target['provider'] ?? null,
+                        'bucket' => $target['bucket'] ?? null,
+                        'enabled' => (bool) ($target['enabled'] ?? false),
+                        'writable' => (bool) ($target['writable'] ?? false),
+                        'recommended' => $key === 'r2_nbx',
+                    ])
+                    ->prepend([
+                        'value' => 'auto',
+                        'label' => 'Automatic',
+                        'provider' => 'auto',
+                        'bucket' => null,
+                        'enabled' => true,
+                        'writable' => true,
+                        'recommended' => true,
+                    ])
+                    ->values(),
                 'video' => [
                     'max_upload_bytes' => (int) config('creator.max_upload_bytes'),
                     'allowed_extensions' => config('creator.allowed_video_extensions', []),

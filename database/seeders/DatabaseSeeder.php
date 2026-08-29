@@ -23,6 +23,8 @@ class DatabaseSeeder extends Seeder
             ActorSeeder::class,
             MovieSeeder::class,
             ArticleSeeder::class,
+            NaraBoxPartnerProgramNewsSeeder::class,
+            PartnerBenefitTypeSeeder::class,
             PaymentGatewaySeeder::class,
             PawaPayGatewaySeeder::class,
             ManualPaymentGatewaySeeder::class,
@@ -33,6 +35,9 @@ class DatabaseSeeder extends Seeder
             AdminAlertSettingSeeder::class,
             HeroSlideSeeder::class,
             CmsPageSeeder::class,
+            PlatformOperationsSeeder::class,
+            SecuritySettingsSeeder::class,
+            CurrentIncidentSecurityRulesSeeder::class,
         ]);
 
         // Create a test admin user

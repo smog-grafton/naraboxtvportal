@@ -74,6 +74,56 @@ return [
             'report' => false,
         ],
 
+        // Multi-bucket storage targets (see config/storage_targets.php).
+        // "contabo_nbx" is the legacy bucket ("nbx") kept readable/writable;
+        // it shares credentials with the "contabo" disk above by default so
+        // upgrading does not require immediately duplicating secrets.
+        'contabo_nbx' => [
+            'driver' => 's3',
+            'key' => env('CONTABO_NBX_ACCESS_KEY_ID', env('CONTABO_OBJECT_STORAGE_ACCESS_KEY')),
+            'secret' => env('CONTABO_NBX_SECRET_ACCESS_KEY', env('CONTABO_OBJECT_STORAGE_SECRET_KEY')),
+            'region' => env('CONTABO_NBX_REGION', env('CONTABO_OBJECT_STORAGE_REGION', 'US-central')),
+            'bucket' => env('CONTABO_NBX_BUCKET', env('CONTABO_OBJECT_STORAGE_BUCKET', 'nbx')),
+            'url' => env('CONTABO_NBX_PUBLIC_URL', env('CONTABO_OBJECT_STORAGE_PUBLIC_URL')),
+            'endpoint' => env('CONTABO_NBX_ENDPOINT', env('CONTABO_OBJECT_STORAGE_ENDPOINT', 'https://usc1.contabostorage.com')),
+            'use_path_style_endpoint' => env('CONTABO_NBX_USE_PATH_STYLE_ENDPOINT', env('CONTABO_OBJECT_STORAGE_USE_PATH_STYLE_ENDPOINT', true)),
+            'visibility' => env('CONTABO_OBJECT_STORAGE_VISIBILITY', 'public'),
+            'throw' => false,
+            'report' => false,
+        ],
+
+        // "contabo_nb_nbx" is the new, separate storage service/bucket
+        // ("nb-nbx"). Credentials are independent — the two Contabo services
+        // are not assumed to share access keys.
+        'contabo_nb_nbx' => [
+            'driver' => 's3',
+            'key' => env('CONTABO_NB_NBX_ACCESS_KEY_ID'),
+            'secret' => env('CONTABO_NB_NBX_SECRET_ACCESS_KEY'),
+            'region' => env('CONTABO_NB_NBX_REGION', 'US-central'),
+            'bucket' => env('CONTABO_NB_NBX_BUCKET', 'nb-nbx'),
+            // See config/storage_targets.php for why this needs the
+            // tenant-ID-prefixed form.
+            'url' => env('CONTABO_NB_NBX_PUBLIC_URL', 'https://usc1.contabostorage.com/5fa286e37e8b403abc5b60ba900a5c3d:nb-nbx'),
+            'endpoint' => env('CONTABO_NB_NBX_ENDPOINT', 'https://usc1.contabostorage.com'),
+            'use_path_style_endpoint' => env('CONTABO_NB_NBX_USE_PATH_STYLE_ENDPOINT', true),
+            'visibility' => env('CONTABO_OBJECT_STORAGE_VISIBILITY', 'public'),
+            'throw' => false,
+            'report' => false,
+        ],
+
+        'r2' => [
+            'driver' => 's3',
+            'key' => env('CLOUDFLARE_R2_ACCESS_KEY_ID', env('R2_ACCESS_KEY_ID')),
+            'secret' => env('CLOUDFLARE_R2_SECRET_ACCESS_KEY', env('R2_SECRET_ACCESS_KEY')),
+            'region' => env('CLOUDFLARE_R2_REGION', env('R2_REGION', 'auto')),
+            'bucket' => env('CLOUDFLARE_R2_BUCKET', env('R2_BUCKET', 'nbx')),
+            'url' => env('CLOUDFLARE_R2_PUBLIC_URL', env('R2_PUBLIC_URL', 'https://nbxgen.naraboxtv.com')),
+            'endpoint' => env('CLOUDFLARE_R2_ENDPOINT', env('R2_ENDPOINT')),
+            'use_path_style_endpoint' => (bool) env('CLOUDFLARE_R2_USE_PATH_STYLE_ENDPOINT', env('R2_USE_PATH_STYLE_ENDPOINT', false)),
+            'throw' => false,
+            'report' => false,
+        ],
+
     ],
 
     /*

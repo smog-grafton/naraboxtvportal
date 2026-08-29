@@ -43,9 +43,11 @@ class IoTeCController extends Controller
         $host = $parsed['host'] ?? null;
         if ($host && strtolower($host) === strtolower($frontendHost)) {
             $path = $parsed['path'] ?? '/';
-            $query = isset($parsed['query']) ? '?' . $parsed['query'] : '';
-            return $path . $query;
+            $query = isset($parsed['query']) ? '?'.$parsed['query'] : '';
+
+            return $path.$query;
         }
+
         return null;
     }
 
@@ -84,15 +86,12 @@ class IoTeCController extends Controller
      *  "status": "PENDING",
      *  "message": "Prompt sent to 25678*****000"
      * }
-     *
      * @response 400 {
      *  "error": "ioTec Pay gateway is not available"
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
-     *
      * @response 422 {
      *  "error": "Invalid Uganda phone number. Use 256XXXXXXXXX or 0XXXXXXXXX."
      * }
@@ -163,7 +162,7 @@ class IoTeCController extends Controller
             $meta['payer_name'] = $request->payer_name;
         }
 
-        $txRef = 'NBX-IOT-' . strtoupper(Str::random(10)) . '-' . time();
+        $txRef = 'NBX-IOT-'.strtoupper(Str::random(10)).'-'.time();
 
         $transaction = PaymentTransaction::create([
             'user_id' => $user->id,
@@ -179,13 +178,16 @@ class IoTeCController extends Controller
             'meta' => $meta,
             'provider_code' => $method === 'card' ? 'IOTEC_CARD' : 'IOTEC',
         ]);
+        app(\App\Services\PartnerBenefitService::class)->applyFirstPaymentDiscount($transaction->load('user', 'transactionable'));
+        $transaction->refresh();
+        $amount = (float) $transaction->amount;
 
         $service = new IoTeCService($gateway);
-        $payerNote = $request->type === 'RENT' ? 'Rent: ' . ($transactionable?->title ?? '') : ($request->type === 'BUY' ? 'Buy: ' . ($transactionable?->title ?? '') : 'Subscription: ' . ($subscriptionPlan?->name ?? ''));
+        $payerNote = $request->type === 'RENT' ? 'Rent: '.($transactionable?->title ?? '') : ($request->type === 'BUY' ? 'Buy: '.($transactionable?->title ?? '') : 'Subscription: '.($subscriptionPlan?->name ?? ''));
 
         if ($method === 'card') {
             $frontendUrl = rtrim((string) config('app.frontend_url', env('FRONTEND_URL', 'http://localhost:3000')), '/');
-            $cardRedirectTarget = $frontendUrl . '/payment/callback?tx_ref=' . urlencode($txRef) . '&provider=iotec';
+            $cardRedirectTarget = $frontendUrl.'/payment/callback?tx_ref='.urlencode($txRef).'&provider=iotec';
             // ioTec/PegPay's hosted card form renders `payeeNote` as the "Item Description"
             // line, not `payerNote` — pass the same title + purchase-type text to both so the
             // customer sees what they're paying for instead of a generic "NaraBox".
@@ -201,6 +203,7 @@ class IoTeCController extends Controller
                 'gateway_response' => $result,
                 'raw_response' => $result,
             ]);
+
             return response()->json(['error' => $result['error']], 400);
         }
 
@@ -218,21 +221,29 @@ class IoTeCController extends Controller
             $transaction->update([
                 'meta' => array_merge($transaction->meta ?? [], ['card_redirect_url' => $result['card_redirect_url']]),
             ]);
+
             return response()->json([
                 'transaction_ref' => $txRef,
                 'payment_id' => $transaction->id,
                 'status' => 'PENDING',
+                'amount' => $amount,
+                'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+                'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
                 'card_redirect_url' => $result['card_redirect_url'],
                 'message' => 'Redirecting to secure card payment form',
             ]);
         }
 
         $masked = IoTeCService::maskPhone($request->phone);
+
         return response()->json([
             'transaction_ref' => $txRef,
             'payment_id' => $transaction->id,
             'status' => 'PENDING',
-            'message' => 'Prompt sent to ' . $masked,
+            'amount' => $amount,
+            'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+            'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
+            'message' => 'Prompt sent to '.$masked,
         ]);
     }
 
@@ -255,22 +266,18 @@ class IoTeCController extends Controller
      *  "status": "success",
      *  "redirect_url": "/dashboard"
      * }
-     *
      * @response 200 scenario="Failed" {
      *  "status": "failed",
      *  "redirect_url": "/dashboard",
      *  "message": "Payment failed"
      * }
-     *
      * @response 200 scenario="Pending" {
      *  "status": "pending",
      *  "message": "Waiting for confirmation"
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
-     *
      * @response 404 {
      *  "error": "Transaction not found"
      * }
@@ -307,8 +314,13 @@ class IoTeCController extends Controller
         if (in_array($transaction->status, ['SUCCESS', 'FAILED', 'CANCELLED'], true)) {
             $normalized = strtolower($transaction->status);
             if ($normalized === 'success') {
+                if (! $transaction->access_granted_at) {
+                    PaymentApprovalService::grantAccess($transaction);
+                }
+
                 return response()->json(['status' => 'success', 'redirect_url' => $redirectUrl]);
             }
+
             return response()->json([
                 'status' => $normalized,
                 'redirect_url' => $redirectUrl,
@@ -328,6 +340,7 @@ class IoTeCController extends Controller
                 'raw_response' => $statusResult['raw'] ?? $statusResult,
             ]);
             PaymentApprovalService::grantAccess($transaction);
+
             return response()->json(['status' => 'success', 'redirect_url' => $redirectUrl]);
         }
 
@@ -338,6 +351,7 @@ class IoTeCController extends Controller
                 'raw_response' => $statusResult['raw'] ?? $statusResult,
                 'failure_reason' => $statusResult['error'] ?? $statusResult['raw']['statusMessage'] ?? null,
             ]);
+
             return response()->json([
                 'status' => 'failed',
                 'message' => $statusResult['error'] ?? $statusResult['raw']['statusMessage'] ?? 'Payment failed',
@@ -407,14 +421,26 @@ class IoTeCController extends Controller
         }
 
         if ($transaction->status === 'SUCCESS') {
+            if (! $transaction->access_granted_at) {
+                PaymentApprovalService::grantAccess($transaction);
+            }
+
             return response()->json(['status' => 'ok', 'message' => 'Already processed']);
         }
 
         if (strtolower((string) $status) === 'success') {
+            if (strtolower((string) $transaction->paymentGateway?->slug) !== 'iotec' || ! $transaction->gateway_transaction_id) {
+                return response()->json(['error' => 'Provider transaction mismatch'], 422);
+            }
+            $verified = (new IoTeCService($transaction->paymentGateway))->getStatus($transaction->gateway_transaction_id);
+            if (($verified['normalized'] ?? null) !== 'success') {
+                return response()->json(['error' => 'Provider has not verified this payment'], 422);
+            }
             $transaction->update([
                 'status' => 'SUCCESS',
                 'gateway_response' => array_merge($transaction->gateway_response ?? [], ['webhook' => $payload]),
                 'raw_callback' => $payload,
+                'raw_response' => $verified['raw'] ?? $verified,
             ]);
             PaymentApprovalService::grantAccess($transaction);
         } elseif (in_array(strtolower((string) $status), ['failed', 'cancelled', 'rejected'], true)) {
@@ -436,6 +462,7 @@ class IoTeCController extends Controller
         if ($returnUrl && str_starts_with($returnUrl, '/') && ! str_starts_with($returnUrl, '//')) {
             return $returnUrl;
         }
+
         return '/dashboard';
     }
 }

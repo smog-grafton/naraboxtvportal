@@ -30,6 +30,20 @@ class User extends Authenticatable implements FilamentUser
         'plan_status',
         'renewal_date',
         'role_id',
+        'account_status',
+        'risk_level',
+        'security_reason',
+        'security_notes',
+        'status_started_at',
+        'status_expires_at',
+        'status_changed_by',
+        'registration_ip',
+        'registration_user_agent',
+        'registration_device_id',
+        'last_login_ip',
+        'last_login_at',
+        'last_payment_ip',
+        'last_activity_at',
         'email_verified_at',
         'marketing_emails_enabled',
         'marketing_opt_in_token',
@@ -57,6 +71,10 @@ class User extends Authenticatable implements FilamentUser
             'password' => 'hashed',
             'renewal_date' => 'date',
             'marketing_emails_enabled' => 'boolean',
+            'status_started_at' => 'datetime',
+            'status_expires_at' => 'datetime',
+            'last_login_at' => 'datetime',
+            'last_activity_at' => 'datetime',
         ];
     }
 
@@ -145,6 +163,51 @@ class User extends Authenticatable implements FilamentUser
         return $this->hasOne(CreatorWallet::class);
     }
 
+    public function partnerProfile()
+    {
+        return $this->hasOne(Partner::class);
+    }
+
+    public function partnerAttribution()
+    {
+        return $this->hasOne(PartnerAttribution::class);
+    }
+
+    public function partnerEarnings()
+    {
+        return $this->hasMany(PartnerEarning::class);
+    }
+
+    public function socialAccounts()
+    {
+        return $this->hasMany(SocialAccount::class);
+    }
+
+    public function paymentTransactions()
+    {
+        return $this->hasMany(PaymentTransaction::class);
+    }
+
+    public function paymentAttempts()
+    {
+        return $this->hasMany(PaymentAttempt::class);
+    }
+
+    public function securityEvents()
+    {
+        return $this->hasMany(SecurityEvent::class);
+    }
+
+    public function ipActivities()
+    {
+        return $this->hasMany(UserIpActivity::class);
+    }
+
+    public function accountEnforcements()
+    {
+        return $this->hasMany(AccountEnforcement::class);
+    }
+
     public function creatorPayoutMethods()
     {
         return $this->hasMany(CreatorPayoutMethod::class);
@@ -163,6 +226,11 @@ class User extends Authenticatable implements FilamentUser
     public function isAdmin(): bool
     {
         return $this->role && $this->role->name === 'admin';
+    }
+
+    public function isPartner(): bool
+    {
+        return (bool) $this->partnerProfile()->where('status', 'active')->exists();
     }
 
     public function canAccessPanel(Panel $panel): bool

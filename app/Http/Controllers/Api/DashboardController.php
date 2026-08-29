@@ -321,6 +321,39 @@ class DashboardController extends Controller
                 $planDisplayName = $user->plan ?? 'FREE';
             }
         }
+
+        $subscriptionPayload = null;
+        if ($subscriptionIsActive) {
+            $subscriptionPayload = [
+                'plan' => $subscription->subscriptionPlan->name ?? 'Unknown',
+                'status' => 'ACTIVE',
+                'started_at' => $subscription->started_at?->toIso8601String(),
+                'expires_at' => $subscription->expires_at?->toIso8601String(),
+            ];
+        } elseif ($legacySubscription) {
+            $subscriptionPayload = [
+                'plan' => $legacySubscription->plan ?? 'PRO',
+                'status' => 'ACTIVE',
+                'started_at' => $legacySubscription->start_date?->toIso8601String(),
+                'expires_at' => $legacySubscription->end_date?->toIso8601String(),
+            ];
+        } elseif ($manualPlanIsActive) {
+            $subscriptionPayload = [
+                'plan' => $user->plan,
+                'status' => 'ACTIVE',
+                'started_at' => null,
+                'expires_at' => $user->renewal_date?->toIso8601String(),
+            ];
+        } elseif ($subscription) {
+            // Preserve the latest inactive ledger entry so clients can show an
+            // accurate Expired/Cancelled state and its historical end date.
+            $subscriptionPayload = [
+                'plan' => $subscription->subscriptionPlan->name ?? 'Unknown',
+                'status' => strtoupper((string) $subscription->status),
+                'started_at' => $subscription->started_at?->toIso8601String(),
+                'expires_at' => $subscription->expires_at?->toIso8601String(),
+            ];
+        }
         
         return response()->json([
             'user' => [
@@ -335,22 +368,7 @@ class DashboardController extends Controller
                     ? $subscription->expires_at->format('Y-m-d')
                     : ($legacySubscription?->end_date?->format('Y-m-d') ?? $user->renewal_date?->format('Y-m-d')),
             ],
-            'subscription' => $subscriptionIsActive ? [
-                'plan' => $subscription->subscriptionPlan->name ?? 'Unknown',
-                'status' => $subscription->status,
-                'started_at' => $subscription->started_at?->toIso8601String(),
-                'expires_at' => $subscription->expires_at?->toIso8601String(),
-            ] : ($legacySubscription ? [
-                'plan' => $legacySubscription->plan ?? 'PRO',
-                'status' => 'ACTIVE',
-                'started_at' => $legacySubscription->start_date?->toIso8601String(),
-                'expires_at' => $legacySubscription->end_date?->toIso8601String(),
-            ] : ($manualPlanIsActive ? [
-                'plan' => $user->plan,
-                'status' => 'ACTIVE',
-                'started_at' => null,
-                'expires_at' => $user->renewal_date?->toIso8601String(),
-            ] : null)),
+            'subscription' => $subscriptionPayload,
             'pending_subscription' => $pendingSubscriptionPayment ? [
                 'plan' => $pendingSubscriptionPayment->subscriptionPlan->name ?? 'Unknown',
                 'status' => 'PENDING',

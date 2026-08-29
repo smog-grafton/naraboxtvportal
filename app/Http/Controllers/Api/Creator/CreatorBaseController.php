@@ -305,6 +305,10 @@ abstract class CreatorBaseController extends Controller
     protected function formatVideoSource(\App\Models\VideoSource $source): array
     {
         $metadata = $source->metadata ?? [];
+        $targetKey = $source->storage_target_key
+            ?: ($metadata['nbx']['storage_target'] ?? $metadata['storage_target_key'] ?? null);
+        $target = $targetKey ? (array) config('storage_targets.targets.'.$targetKey, []) : [];
+
         return [
             'id' => $source->id,
             'type' => $source->type,
@@ -324,6 +328,12 @@ abstract class CreatorBaseController extends Controller
             'telebot_progress' => $metadata['telebot_progress'] ?? null,
             'object_key' => $metadata['object_key'] ?? null,
             'public_url' => $metadata['public_url'] ?? null,
+            'storage_target_key' => $targetKey,
+            'storage_target_label' => $target['label'] ?? $targetKey,
+            'storage_provider' => $target['provider'] ?? null,
+            'storage_disk' => $source->storage_disk,
+            'storage_bucket' => $source->storage_bucket ?: ($target['bucket'] ?? null),
+            'storage_public_url' => $target['public_url'] ?? null,
             'last_message' => $metadata['last_message'] ?? null,
             'source_role' => $metadata['source_role'] ?? null,
             'processing_stage' => $metadata['processing_stage'] ?? $metadata['cdn_status'] ?? $metadata['fetch_status'] ?? null,

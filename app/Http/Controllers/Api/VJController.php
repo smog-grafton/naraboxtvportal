@@ -75,13 +75,14 @@ class VJController extends Controller
 
     public function show($id)
     {
-        // Support both slug and ID (backward compatibility)
+        // Support both slug and ID (backward compatibility). The VJ's movie
+        // catalogue is intentionally NOT eager-loaded here: the archive grid
+        // on the VJ profile page fetches its own paginated results via
+        // MovieController::index / TVShowController::index (?vj=...), so
+        // embedding every movie in this payload was dead weight that scaled
+        // with catalogue size (was unbounded — no limit/pagination at all).
         $vj = VJ::where('is_active', true)
-            ->with(['genres', 'movies' => function ($query) {
-                $query->where('is_active', true)
-                      ->with(['genres', 'category'])
-                      ->orderBy('trending_score', 'desc');
-            }])
+            ->with('genres')
             ->where(function ($query) use ($id) {
                 $query->where('id', $id)
                       ->orWhere('slug', $id);
@@ -101,15 +102,6 @@ class VJController extends Controller
             return asset('storage/' . $path);
         };
 
-        // Helper to get full URL for images (for movies)
-        $getMovieImageUrl = function ($path) {
-            if (empty($path)) return null;
-            if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
-                return $path;
-            }
-            return asset('storage/' . $path);
-        };
-
         return response()->json([
             'id' => $vj->id,
             'slug' => $vj->slug,
@@ -121,16 +113,6 @@ class VJController extends Controller
             'bio' => $vj->bio,
             'translatedCount' => $vj->translated_count,
             'isVerified' => (bool) ($vj->is_verified ?? false),
-            'movies' => $vj->movies->map(function ($movie) use ($getMovieImageUrl) {
-                return [
-                    'id' => $movie->id,
-                    'slug' => $movie->slug,
-                    'title' => $movie->title,
-                    'thumbnail' => $getMovieImageUrl($movie->thumbnail),
-                    'rating' => (float) $movie->rating,
-                    'genre' => $movie->genres->pluck('name')->toArray(),
-                ];
-            }),
         ]);
     }
 }

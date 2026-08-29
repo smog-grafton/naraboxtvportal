@@ -58,7 +58,7 @@ class EditorialArticlePresenter
             'content' => $article->relationLoaded('blocks')
                 ? $this->legacyContent($article->blocks)
                 : null,
-            'videoUrl' => $article->video_url,
+            'videoUrl' => app(LegacyCdnUrlResolver::class)->resolve($article->video_url),
             'pros' => array_values(array_filter($article->pros ?? [])),
             'cons' => array_values(array_filter($article->cons ?? [])),
             'relatedMovie' => $this->moviePayload($article->movie),

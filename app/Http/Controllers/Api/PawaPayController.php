@@ -8,10 +8,10 @@ use App\Models\PaymentGateway;
 use App\Models\PaymentTransaction;
 use App\Models\SubscriptionPlan;
 use App\Models\TVShow;
-use App\Services\PawaPayService;
-use App\Services\PaymentApprovalService;
 use App\Services\CreatorEarningsService;
 use App\Services\MoneyService;
+use App\Services\PawaPayService;
+use App\Services\PaymentApprovalService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -59,11 +59,9 @@ class PawaPayController extends Controller
      *  "status": "PENDING",
      *  "message": "Deposit initiated. Check your phone to approve payment."
      * }
-     *
      * @response 400 {
      *  "error": "PawaPay gateway is not available"
      * }
-     *
      * @response 422 {
      *  "success": false,
      *  "status": "FAILED",
@@ -84,7 +82,7 @@ class PawaPayController extends Controller
             'subscription_plan_id' => 'required_if:type,SUBSCRIPTION|exists:subscription_plans,id',
             'phone' => 'required|string|max:20',
             'provider' => 'required|string|in:MTN_MOMO_UGA,AIRTEL_OAPI_UGA',
-            'currency' => 'required|string|size:3',
+            'currency' => 'required|string|in:UGX,ugx',
             'deposit_id' => 'nullable|uuid',
             'client_reference_id' => 'nullable|string|max:255',
         ]);
@@ -119,6 +117,10 @@ class PawaPayController extends Controller
             ->first();
 
         if ($existing) {
+            if ((int) $existing->user_id !== (int) $user->id) {
+                return response()->json(['message' => 'This payment reference is unavailable.'], 422);
+            }
+
             return response()->json([
                 'success' => true,
                 'transaction_id' => $existing->id,
@@ -139,7 +141,7 @@ class PawaPayController extends Controller
             'transactionable_type' => $transactionableType,
             'transactionable_id' => $transactionableId,
             'subscription_plan_id' => $subscriptionPlanId,
-            'transaction_ref' => 'NBX-PWP-' . strtoupper(Str::random(10)) . '-' . time(),
+            'transaction_ref' => 'NBX-PWP-'.strtoupper(Str::random(10)).'-'.time(),
             'amount' => $amount,
             'status' => 'PENDING',
             'external_reference' => $depositId,
@@ -153,6 +155,9 @@ class PawaPayController extends Controller
                 'clientReferenceId' => $validated['client_reference_id'] ?? null,
             ],
         ]);
+        app(\App\Services\PartnerBenefitService::class)->applyFirstPaymentDiscount($transaction->load('user', 'transactionable'));
+        $transaction->refresh();
+        $amount = (float) $transaction->amount;
 
         Log::info('pawapay.deposit.initiate.requested', [
             'deposit_id' => $depositId,
@@ -197,6 +202,9 @@ class PawaPayController extends Controller
             'deposit_id' => $depositId,
             'transaction_ref' => $transaction->transaction_ref,
             'status' => $this->toFrontendStatus($transaction->status),
+            'amount' => $amount,
+            'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+            'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
             'message' => 'Deposit initiated. Check your phone to approve payment.',
         ]);
     }
@@ -225,11 +233,9 @@ class PawaPayController extends Controller
      *  "status": "COMPLETED",
      *  "message": null
      * }
-     *
      * @response 404 {
      *  "error": "Transaction not found"
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -251,6 +257,10 @@ class PawaPayController extends Controller
         }
 
         if (in_array($transaction->status, ['SUCCESS', 'FAILED', 'CANCELLED'], true)) {
+            if ($transaction->status === 'SUCCESS' && ! $transaction->access_granted_at) {
+                PaymentApprovalService::grantAccess($transaction);
+            }
+
             return response()->json([
                 'success' => true,
                 'transaction_id' => $transaction->id,
@@ -320,7 +330,7 @@ class PawaPayController extends Controller
         return response()->json(['status' => 'ok']);
     }
 
-    public function refundWebhook(Request $request, CreatorEarningsService $earnings)
+    public function refundWebhook(Request $request, CreatorEarningsService $earnings, \App\Services\RevenueAllocationService $allocations)
     {
         $configuredToken = (string) config('services.pawapay.refund_webhook_token');
         $providedToken = (string) $request->header('X-PawaPay-Refund-Token');
@@ -351,6 +361,11 @@ class PawaPayController extends Controller
             MoneyService::toMinor((string) ($validated['refundAmount'] ?? $validated['amount'])),
             (string) $validated['refundId']
         );
+        $allocations->reversePartnerForTransaction(
+            $transaction,
+            MoneyService::toMinor((string) ($validated['refundAmount'] ?? $validated['amount'])),
+            (string) $validated['refundId']
+        );
         $transaction->update(['raw_callback' => $request->all()]);
 
         return response()->json(['status' => 'ok']);
@@ -361,6 +376,14 @@ class PawaPayController extends Controller
         $body = $result['body'] ?? [];
         $normalized = $result['normalized_status'] ?? 'PENDING';
         $failureReason = $pawaPayService->extractFailureReason($body);
+
+        $reportedAmount = data_get($body, 'amount') ?? data_get($body, 'requestedAmount');
+        $reportedCurrency = data_get($body, 'currency');
+        if ($normalized === 'SUCCESS' && (($reportedAmount !== null && abs((float) $reportedAmount - (float) $transaction->amount) > 0.01)
+            || ($reportedCurrency !== null && strtoupper((string) $reportedCurrency) !== 'UGX'))) {
+            $normalized = 'FAILED';
+            $failureReason = 'Provider amount or currency mismatch.';
+        }
 
         $transaction->update([
             'status' => $normalized,
@@ -378,6 +401,7 @@ class PawaPayController extends Controller
     {
         if ($validated['type'] === 'SUBSCRIPTION') {
             $plan = SubscriptionPlan::findOrFail($validated['subscription_plan_id']);
+
             return (float) $plan->price;
         }
 
@@ -428,9 +452,9 @@ class PawaPayController extends Controller
         if (str_starts_with($digits, '256') && strlen($digits) === 12) {
             $normalized = $digits;
         } elseif (str_starts_with($digits, '0') && strlen($digits) === 10) {
-            $normalized = '256' . substr($digits, 1);
+            $normalized = '256'.substr($digits, 1);
         } elseif (str_starts_with($digits, '7') && strlen($digits) === 9) {
-            $normalized = '256' . $digits;
+            $normalized = '256'.$digits;
         } else {
             return null;
         }
@@ -440,13 +464,20 @@ class PawaPayController extends Controller
 
     private function verifyCallbackSignature(Request $request): bool
     {
+        $configuredToken = (string) config('services.pawapay.webhook_token', '');
+        if ($configuredToken !== '') {
+            $provided = (string) ($request->header('X-PawaPay-Webhook-Token') ?: $request->bearerToken());
+
+            return $provided !== '' && hash_equals($configuredToken, $provided);
+        }
+
         if (! config('services.pawapay.verify_callback_signature', false)) {
             return true;
         }
 
-        // Phase-2 hardening can replace this with full RFC-9421 validation.
-        return $request->headers->has('Signature')
-            && $request->headers->has('Signature-Input')
-            && $request->headers->has('Content-Digest');
+        // Reject instead of treating the mere presence of unverified RFC-9421
+        // headers as authentication. Configure PAWAPAY_WEBHOOK_TOKEN until a
+        // provider public-key verifier is available in the deployment.
+        return false;
     }
 }

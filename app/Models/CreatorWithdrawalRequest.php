@@ -10,6 +10,7 @@ class CreatorWithdrawalRequest extends Model
 {
     protected $fillable = [
         'user_id',
+        'beneficiary_type',
         'payout_method_id',
         'amount',
         'status',
@@ -81,6 +82,11 @@ class CreatorWithdrawalRequest extends Model
     public function isPending(): bool
     {
         return $this->status === self::STATUS_PENDING;
+    }
+
+    public function isPartnerWithdrawal(): bool
+    {
+        return $this->beneficiary_type === 'partner';
     }
 
     public function isCancellable(): bool

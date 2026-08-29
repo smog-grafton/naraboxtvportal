@@ -1,0 +1,113 @@
+name: Articles
+description: |-
+
+  News/editorial. List and fetch by id or slug; filter by category, top_news.
+endpoints:
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/articles
+    metadata:
+      custom: []
+      groupName: Articles
+      groupDescription: |-
+
+        News/editorial. List and fetch by id or slug; filter by category, top_news.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'List articles. Query: category, top_news, per_page.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"data":[{"id":5,"slug":"platform-maintenance-hub-synchronization","title":"Platform Maintenance: Hub Synchronization","excerpt":"Scheduled maintenance for our central identity servers coming this Sunday.","author":"Ops Command","image":"https:\/\/images.unsplash.com\/photo-1451187580459-43490279c0fa?w=1920&h=1080&fit=crop","videoUrl":null,"date":"Nov 05, 2024","category":"Platform","tags":["Technical","Maintenance"],"isTopNews":false,"content":[{"type":"text","value":"We will be updating our core security protocols to ensure your archive data remains encrypted."}]},{"id":4,"slug":"the-rise-of-digital-cinemas-in-east-africa","title":"The Rise of Digital Cinemas in East Africa","excerpt":"Industry analysis on how streaming platforms are disrupting traditional theatre models.","author":"Economic Hub","image":"https:\/\/images.unsplash.com\/photo-1517604931442-7e0c8ed0963c?w=1920&h=1080&fit=crop","videoUrl":null,"date":"Nov 04, 2024","category":"Industry","tags":["Business","Regional"],"isTopNews":false,"content":[{"type":"text","value":"East Africa is witnessing a digital renaissance. Mobile money integration has made premium content accessible to everyone."}]},{"id":3,"slug":"top-5-series-to-binge-this-weekend","title":"Top 5 Series to Binge This Weekend","excerpt":"From Concrete Jungle to Neon Shadows, here is your weekend archive survival guide.","author":"Sarah J.","image":"https:\/\/images.unsplash.com\/photo-1533929736458-ca588d08c8be?w=1920&h=1080&fit=crop","videoUrl":null,"date":"Nov 01, 2024","category":"TV Shows","tags":["Curated","Binge-Watch"],"isTopNews":false,"content":[{"type":"text","value":"The archive is expanding. Here are the top series currently trending in the Luganda Masters section."}]},{"id":2,"slug":"inside-the-booth-vj-junior-on-translating-sci-fi","title":"Inside the Booth: VJ Junior on Translating Sci-Fi","excerpt":"The legend sits down to discuss the challenges of translating futuristic concepts into local dialect.","author":"Mark S.","image":"https:\/\/images.unsplash.com\/photo-1598488035139-bdbb2231ce04?w=1920&h=1080&fit=crop","videoUrl":null,"date":"Oct 28, 2024","category":"Industry","tags":["VJ Culture","Luganda","Masterclass"],"isTopNews":true,"content":[{"type":"text","value":"VJ Junior has been the voice of cinema for over two decades. In our latest exclusive, he breaks down the process of creating \"Cyber-Luganda\" terms for movies like Cyber Enigma."}]},{"id":1,"slug":"narabox-20-the-future-of-african-streaming-architecture","title":"NaraBox 2.0: The Future of African Streaming Architecture","excerpt":"We are rebuilding the core relay network to support 8K VR streams for VJ translated content.","author":"Nara Editorial Team","image":"https:\/\/images.unsplash.com\/photo-1485846234645-a62644f84728?w=1920&h=1080&fit=crop","videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","date":"Oct 24, 2024","category":"Updates","tags":["Architecture","8K","V2.0"],"isTopNews":true,"content":[{"type":"text","value":"Today marks a historic pivot for the NaraBox ecosystem. As we scale our narrative relay modules across the continent, the need for a more robust data pipeline has become critical."},{"type":"quote","value":"Streaming isn''t just about data; it''s about the emotional latency between the VJ''s voice and the viewer''s heart.","author":"Chief Systems Architect"},{"type":"image","value":"https:\/\/images.unsplash.com\/photo-1492684223066-81342ee5ff30?w=1200&h=600&fit=crop","caption":"Technical visualization of the new 8K fiber optic nodes in Kampala."},{"type":"text","value":"The new V2.0 architecture reduces latency by 45% while doubling the audio fidelity of our Luganda voice-overs."},{"type":"gallery","images":["https:\/\/images.unsplash.com\/photo-1550745165-9bc0b252726f?w=600&h=400&fit=crop","https:\/\/images.unsplash.com\/photo-1550751827-4bd374c3f58b?w=600&h=400&fit=crop","https:\/\/images.unsplash.com\/photo-1518770660439-4636190af475?w=600&h=400&fit=crop"]}]}],"meta":{"current_page":1,"last_page":1,"per_page":10,"total":5}}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: 'api/v1/articles/{id}'
+    metadata:
+      custom: []
+      groupName: Articles
+      groupDescription: |-
+
+        News/editorial. List and fetch by id or slug; filter by category, top_news.
+      subgroup: ''
+      subgroupDescription: ''
+      title: ''
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters:
+      id:
+        custom: []
+        name: id
+        description: 'The ID of the article.'
+        required: true
+        example: 1
+        type: integer
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanUrlParameters:
+      id: 1
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"id":1,"slug":"narabox-20-the-future-of-african-streaming-architecture","title":"NaraBox 2.0: The Future of African Streaming Architecture","excerpt":"We are rebuilding the core relay network to support 8K VR streams for VJ translated content.","author":"Nara Editorial Team","image":"https:\/\/images.unsplash.com\/photo-1485846234645-a62644f84728?w=1920&h=1080&fit=crop","videoUrl":"https:\/\/fxtrias.com\/movies\/HIT2D_inverse_energy_cascade.mp4","date":"Oct 24, 2024","category":"Updates","tags":["8K","Architecture","V2.0"],"isTopNews":true,"content":[{"type":"text","value":"Today marks a historic pivot for the NaraBox ecosystem. As we scale our narrative relay modules across the continent, the need for a more robust data pipeline has become critical."},{"type":"quote","value":"Streaming isn''t just about data; it''s about the emotional latency between the VJ''s voice and the viewer''s heart.","author":"Chief Systems Architect"},{"type":"image","value":"https:\/\/images.unsplash.com\/photo-1492684223066-81342ee5ff30?w=1200&h=600&fit=crop","caption":"Technical visualization of the new 8K fiber optic nodes in Kampala."},{"type":"text","value":"The new V2.0 architecture reduces latency by 45% while doubling the audio fidelity of our Luganda voice-overs."},{"type":"gallery","images":["https:\/\/images.unsplash.com\/photo-1550745165-9bc0b252726f?w=600&h=400&fit=crop","https:\/\/images.unsplash.com\/photo-1550751827-4bd374c3f58b?w=600&h=400&fit=crop","https:\/\/images.unsplash.com\/photo-1518770660439-4636190af475?w=600&h=400&fit=crop"]}]}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null

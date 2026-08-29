@@ -3,12 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Movie;
+use App\Models\Payment;
 use App\Models\PaymentGateway;
 use App\Models\PaymentTransaction;
-use App\Models\Payment;
-use App\Models\Movie;
-use App\Models\TVShow;
 use App\Models\SubscriptionPlan;
+use App\Models\TVShow;
 use App\Services\PaymentApprovalService;
 use App\Services\PendingPaymentResolverService;
 use Illuminate\Http\Request;
@@ -25,8 +25,7 @@ class PaymentController extends Controller
 {
     public function __construct(
         private readonly PendingPaymentResolverService $pendingPaymentResolver,
-    ) {
-    }
+    ) {}
 
     /**
      * Get all active payment gateways
@@ -129,7 +128,6 @@ class PaymentController extends Controller
      *  },
      *  "message": "Please follow the instructions and upload proof of payment"
      * }
-     *
      * @response 200 scenario="Automatic gateway" {
      *  "transaction_ref": "NBX-5K8LM3Y7Z0PQ",
      *  "amount": 8500,
@@ -137,11 +135,9 @@ class PaymentController extends Controller
      *  "gateway_type": "AUTOMATIC",
      *  "message": "Payment initiated. Please complete on your device."
      * }
-     *
      * @response 400 {
      *  "error": "Invalid amount"
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -149,7 +145,7 @@ class PaymentController extends Controller
     public function initiate(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -174,7 +170,7 @@ class PaymentController extends Controller
                 : TVShow::findOrFail($request->media_id);
 
             $transactionable = $media;
-            $amount = $request->type === 'RENT' 
+            $amount = $request->type === 'RENT'
                 ? ($media->price_rent ?? 0)
                 : ($media->price_buy ?? 0);
         } elseif ($request->type === 'SUBSCRIPTION') {
@@ -195,16 +191,21 @@ class PaymentController extends Controller
             'transactionable_type' => $transactionable ? get_class($transactionable) : null,
             'transactionable_id' => $transactionable ? $transactionable->id : null,
             'subscription_plan_id' => $subscriptionPlan ? $subscriptionPlan->id : null,
-            'transaction_ref' => 'NBX-' . strtoupper(Str::random(12)),
+            'transaction_ref' => 'NBX-'.strtoupper(Str::random(12)),
             'amount' => $amount,
             'status' => 'PENDING',
         ]);
+        app(\App\Services\PartnerBenefitService::class)->applyFirstPaymentDiscount($transaction->load('user', 'transactionable'));
+        $transaction->refresh();
+        $amount = (float) $transaction->amount;
 
         // If manual gateway, return instructions
         if ($gateway->type === 'MANUAL') {
             return response()->json([
                 'transaction_ref' => $transaction->transaction_ref,
                 'amount' => $amount,
+                'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+                'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
                 'status' => 'PENDING',
                 'gateway_type' => 'MANUAL',
                 'instructions' => $gateway->instructions,
@@ -218,6 +219,8 @@ class PaymentController extends Controller
         return response()->json([
             'transaction_ref' => $transaction->transaction_ref,
             'amount' => $amount,
+            'original_amount' => (int) data_get($transaction->meta, 'original_amount_minor', $amount),
+            'discount_amount' => (int) data_get($transaction->meta, 'discount_amount_minor', 0),
             'status' => 'PENDING',
             'gateway_type' => 'AUTOMATIC',
             'message' => 'Payment initiated. Please complete on your device.',
@@ -245,11 +248,9 @@ class PaymentController extends Controller
      *  "message": "Payment proof uploaded. Waiting for admin approval.",
      *  "payment_id": 42
      * }
-     *
      * @response 400 {
      *  "error": "Transaction is not pending"
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -257,7 +258,7 @@ class PaymentController extends Controller
     public function uploadProof(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -318,13 +319,11 @@ class PaymentController extends Controller
      *  "status": "APPROVED",
      *  "message": "Payment approved. Access granted."
      * }
-     *
      * @response 200 scenario="Manual gateway pending" {
      *  "success": false,
      *  "status": "PENDING",
      *  "message": "Payment is pending admin approval"
      * }
-     *
      * @response 200 scenario="Automatic gateway success" {
      *  "success": true,
      *  "transaction": {
@@ -333,7 +332,6 @@ class PaymentController extends Controller
      *    "type": "RENT"
      *  }
      * }
-     *
      * @response 401 {
      *  "error": "Unauthorized"
      * }
@@ -341,7 +339,7 @@ class PaymentController extends Controller
     public function verify(Request $request)
     {
         $user = Auth::user();
-        if (!$user) {
+        if (! $user) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
@@ -356,8 +354,8 @@ class PaymentController extends Controller
         // For manual payments, check if approved
         if ($transaction->paymentGateway->type === 'MANUAL') {
             $payment = Payment::where('transaction_id', $transaction->id)->first();
-            
-            if (!$payment) {
+
+            if (! $payment) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Payment proof not uploaded yet',
@@ -366,6 +364,7 @@ class PaymentController extends Controller
 
             if ($payment->status === 'APPROVED') {
                 PaymentApprovalService::grantAccess($transaction);
+
                 return response()->json([
                     'success' => true,
                     'status' => 'APPROVED',
@@ -387,6 +386,10 @@ class PaymentController extends Controller
         }
 
         if ($transaction->status === 'SUCCESS') {
+            if (! $transaction->access_granted_at) {
+                PaymentApprovalService::grantAccess($transaction);
+            }
+
             return response()->json([
                 'success' => true,
                 'transaction' => [

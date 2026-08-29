@@ -352,6 +352,17 @@ class MovieResource extends Resource
     {
         return $table
             ->columns([
+                Tables\Columns\TextColumn::make('id')
+                    ->label('ID')
+                    ->sortable()
+                    ->copyable()
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        $search = trim($search);
+
+                        return ctype_digit($search)
+                            ? $query->whereKey((int) $search)
+                            : $query->whereRaw('1 = 0');
+                    }),
                 Tables\Columns\ImageColumn::make('thumbnail')
                     ->label('Poster')
                     ->size(50),

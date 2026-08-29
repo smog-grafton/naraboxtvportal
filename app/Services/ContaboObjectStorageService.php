@@ -2,14 +2,49 @@
 
 namespace App\Services;
 
+use App\Services\Storage\StorageTarget;
+use App\Services\Storage\StorageTargetRegistry;
+use App\Services\Storage\StorageUsageService;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
+/**
+ * Direct-upload/fetch/URL-generation gateway for ONE Contabo storage target.
+ * By default this resolves to the legacy target (contabo_nbx) so existing
+ * callers of app(ContaboObjectStorageService::class) keep working unchanged.
+ * Call ->forTarget($key) to operate against a different logical target
+ * (e.g. contabo_nb_nbx) without touching any other call site.
+ */
 class ContaboObjectStorageService
 {
     private const VIDEO_EXTENSIONS = ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpeg', 'mpg', 'ts', 'm3u8'];
 
     private ?string $lastCredentialDiscoveryError = null;
+
+    private StorageTarget $target;
+
+    public function __construct(
+        private readonly StorageTargetRegistry $registry,
+        private readonly StorageUsageService $usageService,
+        ?string $targetKey = null,
+    ) {
+        $this->target = $this->registry->findOrFail($this->registry->normalizeStoredKey($targetKey));
+    }
+
+    public function forTarget(string $targetKey): self
+    {
+        return new self($this->registry, $this->usageService, $targetKey);
+    }
+
+    public function target(): StorageTarget
+    {
+        return $this->target;
+    }
+
+    public function targetKey(): string
+    {
+        return $this->target->key;
+    }
 
     public function isConfigured(): bool
     {
@@ -17,7 +52,7 @@ class ContaboObjectStorageService
 
         $disk = config('filesystems.disks.'.$this->diskName(), []);
 
-        return (bool) config('services.contabo_object_storage.enabled', false)
+        return $this->target->enabled
             && filled($disk['key'] ?? null)
             && filled($disk['secret'] ?? null)
             && filled($disk['bucket'] ?? null)
@@ -26,26 +61,30 @@ class ContaboObjectStorageService
 
     public function configurationError(): string
     {
-        if (! (bool) config('services.contabo_object_storage.enabled', false)) {
-            return 'Contabo Object Storage is disabled in the active .env. Set CONTABO_OBJECT_STORAGE_ENABLED=true and run php artisan config:clear.';
+        if (! $this->target->enabled) {
+            return "Storage target [{$this->target->label}] is disabled in the active .env. Enable it and run php artisan config:clear.";
         }
 
         $disk = config('filesystems.disks.'.$this->diskName(), []);
         $missing = [];
 
         if (! filled($disk['bucket'] ?? null)) {
-            $missing[] = 'CONTABO_OBJECT_STORAGE_BUCKET';
+            $missing[] = 'bucket';
         }
         if (! filled($disk['endpoint'] ?? null)) {
-            $missing[] = 'CONTABO_OBJECT_STORAGE_ENDPOINT';
+            $missing[] = 'endpoint';
         }
 
         if ($missing !== []) {
-            return 'Contabo Object Storage is missing '.implode(', ', $missing).' in the active .env.';
+            return "Storage target [{$this->target->label}] is missing ".implode(', ', $missing).' configuration in the active .env.';
         }
 
         if (filled($disk['key'] ?? null) && filled($disk['secret'] ?? null)) {
-            return 'Contabo Object Storage could not initialize the configured S3 disk. Check the access key, secret key, bucket, and endpoint.';
+            return "Storage target [{$this->target->label}] could not initialize the configured S3 disk. Check the access key, secret key, bucket, and endpoint.";
+        }
+
+        if ($this->target->key !== $this->registry->legacyKey()) {
+            return "Storage target [{$this->target->label}] is missing S3 access credentials in the active .env.";
         }
 
         $apiConfigured = app(ContaboApiClientService::class)->isConfigured();
@@ -62,25 +101,23 @@ class ContaboObjectStorageService
 
     public function diskName(): string
     {
-        return (string) config('services.contabo_object_storage.disk', 'contabo');
+        return $this->target->disk;
     }
 
     public function bucket(): string
     {
-        return (string) config('services.contabo_object_storage.bucket', 'nbx');
+        return $this->target->bucket;
     }
 
     public function endpoint(): string
     {
-        return rtrim((string) config('services.contabo_object_storage.endpoint', 'https://usc1.contabostorage.com'), '/');
+        return $this->target->endpoint;
     }
 
     public function publicBaseUrl(): string
     {
-        $configured = trim((string) config('services.contabo_object_storage.public_url', ''));
-
-        if ($configured !== '') {
-            return rtrim($configured, '/');
+        if ($this->target->publicUrl !== '') {
+            return $this->target->publicUrl;
         }
 
         return $this->endpoint().'/'.$this->bucket();
@@ -154,7 +191,7 @@ class ContaboObjectStorageService
         ?string $quality = null,
         ?string $format = null
     ): string {
-        $prefix = trim((string) config('services.contabo_object_storage.path_prefix', 'videos'), '/');
+        $prefix = $this->target->pathPrefix;
         $group = $sourceableType === 'App\Models\Episode' || $assetType === 'episode' ? 'episodes' : 'movies';
         $extension = $this->resolveSafeVideoExtension(
             strtolower((string) pathinfo($filename, PATHINFO_EXTENSION)),
@@ -188,7 +225,7 @@ class ContaboObjectStorageService
         if (! is_file($absolutePath)) {
             return [
                 'ok' => false,
-                'error' => 'The source file could not be found before uploading to Contabo Object Storage.',
+                'error' => 'The source file could not be found before uploading to object storage.',
             ];
         }
 
@@ -211,9 +248,10 @@ class ContaboObjectStorageService
         }
 
         try {
-            $stored = Storage::disk($this->diskName())->put($key, $stream, [
-                'visibility' => (string) config('services.contabo_object_storage.visibility', 'public'),
-            ]);
+            $options = $this->target->provider === 'cloudflare_r2'
+                ? []
+                : ['visibility' => (string) config('services.contabo_object_storage.visibility', 'public')];
+            $stored = Storage::disk($this->diskName())->put($key, $stream, $options);
         } finally {
             if (is_resource($stream)) {
                 fclose($stream);
@@ -223,15 +261,20 @@ class ContaboObjectStorageService
         if (! $stored) {
             return [
                 'ok' => false,
-                'error' => 'Contabo Object Storage upload failed.',
+                'error' => $this->target->label.' upload failed.',
             ];
+        }
+
+        $fileSize = filesize($absolutePath) ?: 0;
+        if ($fileSize > 0) {
+            $this->usageService->recordUpload($this->target->key, $fileSize);
         }
 
         return [
             'ok' => true,
             'key' => $key,
             'public_url' => $this->publicUrl($key),
-            'file_size' => filesize($absolutePath) ?: null,
+            'file_size' => $fileSize ?: null,
             'error' => null,
         ];
     }
@@ -309,9 +352,10 @@ class ContaboObjectStorageService
             }
 
             try {
-                $stored = Storage::disk($this->diskName())->put($key, $resource, [
-                    'visibility' => (string) config('services.contabo_object_storage.visibility', 'public'),
-                ]);
+                $options = $this->target->provider === 'cloudflare_r2'
+                    ? []
+                    : ['visibility' => (string) config('services.contabo_object_storage.visibility', 'public')];
+                $stored = Storage::disk($this->diskName())->put($key, $resource, $options);
             } finally {
                 if (is_resource($resource)) {
                     fclose($resource);
@@ -321,17 +365,21 @@ class ContaboObjectStorageService
             if (! $stored) {
                 return [
                     'ok' => false,
-                    'error' => 'Contabo Object Storage upload failed.',
+                    'error' => $this->target->label.' upload failed.',
                 ];
             }
 
             $contentLength = $response->getHeaderLine('Content-Length');
+            $uploadedBytes = is_numeric($contentLength) ? (int) $contentLength : 0;
+            if ($uploadedBytes > 0) {
+                $this->usageService->recordUpload($this->target->key, $uploadedBytes);
+            }
 
             return [
                 'ok' => true,
                 'key' => $key,
                 'public_url' => $this->publicUrl($key),
-                'file_size' => is_numeric($contentLength) ? (int) $contentLength : null,
+                'file_size' => $uploadedBytes ?: null,
                 'error' => null,
             ];
         } catch (\Throwable $exception) {

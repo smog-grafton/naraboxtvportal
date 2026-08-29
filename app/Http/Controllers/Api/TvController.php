@@ -18,6 +18,8 @@ use App\Models\UserPurchase;
 use App\Models\UserRental;
 use App\Models\UserSubscription;
 use App\Models\WatchHistory;
+use App\Services\AccountSecurityService;
+use App\Services\AuthSessionService;
 use App\Services\PaymentApprovalService;
 use App\Support\EditorialArticlePresenter;
 use Illuminate\Http\JsonResponse;
@@ -30,8 +32,8 @@ class TvController extends Controller
 {
     public function __construct(
         private readonly EditorialArticlePresenter $articlePresenter,
-    ) {
-    }
+        private readonly AuthSessionService $authSessions,
+    ) {}
 
     public function issueDeviceCode(Request $request): JsonResponse
     {
@@ -56,10 +58,10 @@ class TvController extends Controller
             'issued_user_agent' => Str::limit((string) $request->userAgent(), 1000, ''),
         ]);
 
-        $verificationPath = '/tv/activate?code=' . urlencode($deviceCode->user_code);
-        $pairingPath = '/tv/pair?code=' . urlencode($deviceCode->user_code);
-        $verificationUri = rtrim($this->frontendUrl(), '/') . $verificationPath;
-        $pairingUri = rtrim($this->frontendUrl(), '/') . $pairingPath;
+        $verificationPath = '/tv/activate?code='.urlencode($deviceCode->user_code);
+        $pairingPath = '/tv/pair?code='.urlencode($deviceCode->user_code);
+        $verificationUri = rtrim($this->frontendUrl(), '/').$verificationPath;
+        $pairingUri = rtrim($this->frontendUrl(), '/').$pairingPath;
 
         return response()->json([
             'data' => [
@@ -133,7 +135,13 @@ class TvController extends Controller
             ], 404);
         }
 
-        $token = $user->createToken('tv_device_' . ($record->device?->device_identifier ?? Str::random(8)))->plainTextToken;
+        if ($response = app(AccountSecurityService::class)->blockingResponse($user)) {
+            $record->update(['status' => TvDeviceCode::STATUS_EXPIRED]);
+
+            return $response;
+        }
+
+        $session = $this->authSessions->issue($user, 'tv');
 
         $record->update([
             'status' => TvDeviceCode::STATUS_CONSUMED,
@@ -153,8 +161,42 @@ class TvController extends Controller
         return response()->json([
             'data' => [
                 'status' => TvDeviceCode::STATUS_APPROVED,
-                'token' => $token,
+                'token' => $session['token'],
+                'refresh_token' => $session['refresh_token'],
+                'access_token_expires_at' => $session['access_token_expires_at'],
+                'refresh_token_expires_at' => $session['refresh_token_expires_at'],
                 'user' => $this->formatUser($user),
+                'device' => $this->formatDevice($record->device),
+            ],
+        ]);
+    }
+
+    public function inspectDeviceCode(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'user_code' => 'required|string|size:6',
+        ]);
+
+        $record = TvDeviceCode::query()
+            ->with('device')
+            ->where('user_code', strtoupper(trim($validated['user_code'])))
+            ->first();
+
+        if (! $record || $record->status === TvDeviceCode::STATUS_CONSUMED) {
+            return response()->json([
+                'error' => 'That TV code is not available.',
+                'code' => 'TV_CODE_INVALID',
+            ], 404);
+        }
+
+        if ($record->expires_at->isPast() && $record->status !== TvDeviceCode::STATUS_EXPIRED) {
+            $record->update(['status' => TvDeviceCode::STATUS_EXPIRED]);
+        }
+
+        return response()->json([
+            'data' => [
+                'status' => $record->status,
+                'expires_at' => $record->expires_at?->toIso8601String(),
                 'device' => $this->formatDevice($record->device),
             ],
         ]);
@@ -550,7 +592,7 @@ class TvController extends Controller
         if ($validated['type'] === 'SUBSCRIPTION') {
             $plan = SubscriptionPlan::query()->findOrFail($validated['subscription_plan_id']);
 
-            return [$plan->name . ' Subscription', (float) $plan->price];
+            return [$plan->name.' Subscription', (float) $plan->price];
         }
 
         $model = $validated['media_type'] === 'MOVIE'
@@ -670,8 +712,8 @@ class TvController extends Controller
 
     private function formatCheckoutSession(TvCheckoutSession $session, bool $withUrls = false): array
     {
-        $checkoutPath = '/tv/checkout/' . $session->uuid;
-        $checkoutUrl = rtrim($this->frontendUrl(), '/') . $checkoutPath;
+        $checkoutPath = '/tv/checkout/'.$session->uuid;
+        $checkoutUrl = rtrim($this->frontendUrl(), '/').$checkoutPath;
         $transaction = $session->transaction_ref
             ? PaymentTransaction::query()
                 ->where('user_id', $session->user_id)
@@ -771,16 +813,16 @@ class TvController extends Controller
 
         $title = $media->title ?? 'Unknown';
         $subtitle = null;
-        $route = '/watch/movie/' . $media->id;
+        $route = '/watch/movie/'.$media->id;
 
         if ($history->episode && $history->episode->season && $history->episode->season->tvShow) {
             $title = $history->episode->season->tvShow->title;
-            $subtitle = 'S' . $history->episode->season->number . ' E' . $history->episode->number . ' • ' . ($history->episode->title ?: 'Episode');
-            $route = '/watch/tv-show/' . $history->episode->season->tvShow->id . '?episode=' . $history->episode->id;
+            $subtitle = 'S'.$history->episode->season->number.' E'.$history->episode->number.' • '.($history->episode->title ?: 'Episode');
+            $route = '/watch/tv-show/'.$history->episode->season->tvShow->id.'?episode='.$history->episode->id;
         }
 
         return [
-            'id' => 'history-' . $history->id,
+            'id' => 'history-'.$history->id,
             'type' => 'continue_watching',
             'title' => $title,
             'subtitle' => $subtitle,
@@ -806,7 +848,7 @@ class TvController extends Controller
         $isSeries = in_array($rawMediaType, ['TV_SHOW', 'TVSHOW', 'SERIES'], true);
 
         return [
-            'id' => 'movie-' . $movie->id,
+            'id' => 'movie-'.$movie->id,
             'entity_id' => $movie->id,
             'type' => 'movie',
             'media_type' => $isSeries ? 'TV_SHOW' : 'MOVIE',
@@ -826,15 +868,15 @@ class TvController extends Controller
             'badge' => $hero
                 ? 'Featured'
                 : ($isSeries ? 'Series' : ($movie->is_free ? 'Free' : ($movie->is_premium ? 'Premium' : null))),
-            'route' => '/movies/' . $movie->id,
-            'watch_route' => $isSeries ? null : '/watch/movie/' . $movie->id,
+            'route' => '/movies/'.$movie->id,
+            'watch_route' => $isSeries ? null : '/watch/movie/'.$movie->id,
         ];
     }
 
     private function formatTvShowCard(TVShow $show): array
     {
         return [
-            'id' => 'tv-show-' . $show->id,
+            'id' => 'tv-show-'.$show->id,
             'entity_id' => $show->id,
             'type' => 'tv_show',
             'title' => $show->title,
@@ -851,15 +893,15 @@ class TvController extends Controller
                 'price_buy' => $show->price_buy ? (float) $show->price_buy : null,
             ],
             'badge' => $show->is_free ? 'Free' : ($show->is_premium ? 'Premium' : 'Series'),
-            'route' => '/shows/' . $show->id,
-            'watch_route' => '/watch/tv-show/' . $show->id,
+            'route' => '/shows/'.$show->id,
+            'watch_route' => '/watch/tv-show/'.$show->id,
         ];
     }
 
     private function formatLiveStreamCard(LiveStream $stream): array
     {
         return [
-            'id' => 'live-' . $stream->id,
+            'id' => 'live-'.$stream->id,
             'entity_id' => $stream->id,
             'type' => 'live_stream',
             'title' => $stream->title,
@@ -869,8 +911,8 @@ class TvController extends Controller
             'backdrop' => $this->imageUrl($stream->thumbnail),
             'badge' => $stream->is_live ? 'LIVE' : 'Replay',
             'viewer_count' => $stream->viewer_count,
-            'route' => '/live/' . $stream->id,
-            'watch_route' => '/watch/live-stream/' . $stream->id,
+            'route' => '/live/'.$stream->id,
+            'watch_route' => '/watch/live-stream/'.$stream->id,
         ];
     }
 
@@ -879,7 +921,7 @@ class TvController extends Controller
         $summary = $this->articlePresenter->summary($article);
 
         return [
-            'id' => 'article-' . $article->id,
+            'id' => 'article-'.$article->id,
             'entity_id' => $article->id,
             'type' => 'article',
             'title' => $summary['title'] ?? $article->title,
@@ -888,7 +930,7 @@ class TvController extends Controller
             'thumbnail' => $this->imageUrl($summary['image'] ?? $article->image),
             'backdrop' => $this->imageUrl($summary['image'] ?? $article->image),
             'badge' => $article->is_top_news ? 'Top Story' : ucfirst((string) ($article->post_type ?? 'news')),
-            'route' => '/articles/' . $article->id,
+            'route' => '/articles/'.$article->id,
         ];
     }
 
@@ -902,7 +944,7 @@ class TvController extends Controller
             return $path;
         }
 
-        return asset('storage/' . ltrim($path, '/'));
+        return asset('storage/'.ltrim($path, '/'));
     }
 
     private function frontendUrl(): string

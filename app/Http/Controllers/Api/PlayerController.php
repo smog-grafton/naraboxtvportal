@@ -423,10 +423,37 @@ class PlayerController extends Controller
         $allow720p = $this->canStream720p($user);
 
         $videoSources = $videoSourceModels
-            ->map(fn ($source, int $index): array => $selection->toCandidate($source, $index === 0))
+            ->flatMap(fn ($source, int $index): array => $selection->toCandidates($source, $index === 0))
             ->filter(fn (array $source): bool => is_string($source['url'] ?? null) && trim((string) $source['url']) !== '')
             ->filter(fn (array $source): bool => $this->isAllowedPlaybackQuality($source, $allow720p))
+            ->unique('url')
             ->values();
+
+        $originalVideoUrl = $episode
+            ? $this->directlyPlayableOriginalUrl($episode->video_url)
+            : ($isTVShow ? null : $this->directlyPlayableOriginalUrl($movie->video_url));
+        if ($originalVideoUrl && ! $videoSources->contains('url', $originalVideoUrl)) {
+            $path = strtolower((string) parse_url($originalVideoUrl, PHP_URL_PATH));
+            $isHlsOriginal = str_ends_with($path, '.m3u8');
+            $videoSources->push([
+                'id' => 'legacy-original',
+                'role' => $isHlsOriginal ? 'hls_master' : 'source_original',
+                'server' => 'legacy',
+                'server_key' => 'legacy',
+                'source_group' => 'legacy-original',
+                'format' => $isHlsOriginal ? 'm3u8' : strtolower((string) (pathinfo($path, PATHINFO_EXTENSION) ?: 'mp4')),
+                'quality' => $isHlsOriginal ? 'auto' : 'original',
+                'is_primary' => false,
+                'isPrimary' => false,
+                'configured_primary' => false,
+                'is_active' => true,
+                'health_status' => 'unknown',
+                'verified_at' => null,
+                'url' => $originalVideoUrl,
+                'type' => $isHlsOriginal ? 'hls' : 'url',
+                'duration' => null,
+            ]);
+        }
 
         // Helper to get full URL for images (define early so it can be used)
         $getImageUrl = function ($path) {
@@ -470,15 +497,9 @@ class PlayerController extends Controller
         }
         $videoUrl = $primarySource['url'] ?? null;
 
-        // Fallback to video_url field if no video sources
+        // Fallback to the legacy video_url field if no modeled source exists.
         if (empty($videoUrl)) {
-            if ($episode) {
-                $videoUrl = $this->directlyPlayableOriginalUrl($episode->video_url);
-            } elseif ($isTVShow) {
-                $videoUrl = null; // TV shows don't have direct video_url
-            } else {
-                $videoUrl = $this->directlyPlayableOriginalUrl($movie->video_url);
-            }
+            $videoUrl = $originalVideoUrl;
         }
 
         // No default video - return error if no source available
@@ -1192,7 +1213,7 @@ class PlayerController extends Controller
         }
 
         return preg_match('/\.(m3u8|mp4|m4v|webm|mkv|mov)(?:$|[?#])/i', $url) === 1
-            ? $url
+            ? app(\App\Support\LegacyCdnUrlResolver::class)->resolve($url)
             : null;
     }
 
@@ -1980,6 +2001,17 @@ class PlayerController extends Controller
             return null;
         }
 
+        foreach ($sources as $source) {
+            if (! is_array($source)) {
+                continue;
+            }
+            if ($this->isHlsPlaybackSource($source)
+                && (! $preferBrowserSafePlayback || $this->isBrowserCompatibleVideoSource($source))
+            ) {
+                return $source;
+            }
+        }
+
         if (! $preferBrowserSafePlayback) {
             foreach ($sources as $source) {
                 if (! empty($source['isPrimary'])) {
@@ -2146,6 +2178,13 @@ class PlayerController extends Controller
     private function orderVideoSourcesForBrowser(array $sources): array
     {
         usort($sources, function ($a, $b) {
+            $aHls = is_array($a) ? $this->isHlsPlaybackSource($a) : false;
+            $bHls = is_array($b) ? $this->isHlsPlaybackSource($b) : false;
+
+            if ($aHls !== $bHls) {
+                return $aHls ? -1 : 1;
+            }
+
             $aCompatible = is_array($a) ? $this->isBrowserCompatibleVideoSource($a) : false;
             $bCompatible = is_array($b) ? $this->isBrowserCompatibleVideoSource($b) : false;
 
@@ -2164,6 +2203,17 @@ class PlayerController extends Controller
         });
 
         return $sources;
+    }
+
+    private function isHlsPlaybackSource(array $source): bool
+    {
+        $role = strtolower((string) ($source['role'] ?? ''));
+        $format = strtolower((string) ($source['format'] ?? $source['type'] ?? ''));
+        $url = strtolower((string) ($source['url'] ?? ''));
+
+        return $role === 'hls_master'
+            || in_array($format, ['hls', 'm3u8'], true)
+            || str_contains($url, '.m3u8');
     }
 
     private function isBrowserCompatibleVideoSource(array $source): bool

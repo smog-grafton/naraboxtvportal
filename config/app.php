@@ -54,7 +54,12 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+    'frontend_url' => env('FRONTEND_URL', 'https://naraboxtv.com'),
+
+    // Partner agreements are selected as Uganda calendar dates in Filament.
+    // Keep this separate from the app's storage/runtime timezone so existing
+    // UTC timestamps are not reinterpreted globally.
+    'partner_timezone' => env('PARTNER_TIMEZONE', 'Africa/Kampala'),
 
     /*
     |--------------------------------------------------------------------------
@@ -68,6 +73,10 @@ return [
     */
 
     'timezone' => 'UTC',
+
+    // Audience-facing day/week/month boundaries for discovery rankings. Stored
+    // playback timestamps remain UTC and are converted at the query boundary.
+    'trending_timezone' => env('TRENDING_TIMEZONE', 'Africa/Kampala'),
 
     /*
     |--------------------------------------------------------------------------

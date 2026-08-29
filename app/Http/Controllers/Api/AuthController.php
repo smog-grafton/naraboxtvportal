@@ -12,11 +12,18 @@ use App\Models\SocialAccount;
 use App\Models\User;
 use App\Models\UserSubscription;
 use App\Models\WebBridgeToken;
+use App\Services\AccountSecurityService;
+use App\Services\AuthSessionService;
 use App\Services\EmailService;
 use App\Services\IoTeCService;
+use App\Services\PartnerApplicationService;
+use App\Services\PartnerAttributionService;
+use App\Services\PartnerDiscoveryService;
+use App\Services\RegistrationSecurityService;
 use App\Services\SmsService;
 use Firebase\JWT\JWK;
 use Firebase\JWT\JWT;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -33,6 +40,12 @@ use Laravel\Socialite\Facades\Socialite;
  */
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly AuthSessionService $authSessions,
+        private readonly RegistrationSecurityService $registrationSecurity,
+        private readonly AccountSecurityService $accountSecurity,
+    ) {}
+
     protected function normalizeBridgeNextPath(?string $candidate): string
     {
         $value = trim((string) ($candidate ?? ''));
@@ -67,9 +80,11 @@ class AuthController extends Controller
     /**
      * Build a consistent authentication response payload.
      */
-    protected function buildAuthPayload(User $user, string $token, string $provider, bool $isNewUser = false, bool $requiresVerification = false): array
+    protected function buildAuthPayload(User $user, string|array $token, string $provider, bool $isNewUser = false, bool $requiresVerification = false): array
     {
-        return [
+        $session = is_array($token) ? $token : ['token' => $token];
+
+        return array_merge([
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -83,13 +98,29 @@ class AuthController extends Controller
                 'role' => $user->role ? $user->role->name : 'customer',
                 'is_creator' => $user->isCreator(),
                 'has_creator_workspace' => $user->hasCreatorWorkspace(),
+                'is_partner' => $user->isPartner(),
+                'has_partner_workspace' => $user->isPartner(),
+                'account_status' => $user->account_status ?? 'ACTIVE',
+                'risk_level' => $user->risk_level ?? 'NORMAL',
+                'partner_profile' => $user->partnerProfile ? [
+                    'id' => $user->partnerProfile->id,
+                    'display_name' => $user->partnerProfile->display_name,
+                    'slug' => $user->partnerProfile->slug,
+                    'referral_code' => $user->partnerProfile->referral_code,
+                    'status' => $user->partnerProfile->status,
+                ] : null,
                 'creator_application' => $this->formatCreatorApplication($user),
             ],
-            'token' => $token,
+            'token' => $session['token'],
             'auth_provider' => $provider,
             'is_new_user' => $isNewUser,
             'requires_verification' => $requiresVerification,
-        ];
+        ], array_intersect_key($session, array_flip([
+            'refresh_token',
+            'access_token_expires_at',
+            'refresh_token_expires_at',
+            'session_id',
+        ])));
     }
 
     /**
@@ -114,6 +145,10 @@ class AuthController extends Controller
             'email' => 'nullable|string|email|max:255',
             'password' => 'required|string|min:8|confirmed',
             'phone' => 'nullable|string|max:255',
+            'partner_referral_code' => 'nullable|string|max:64',
+            'partner_campaign' => 'nullable|string|max:128',
+            'discovery_source' => 'nullable|string|max:64',
+            'partner_interest' => 'sometimes|boolean',
         ]);
 
         $validator->after(function ($v) use ($request) {
@@ -128,19 +163,52 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
+        }
+
+        if ($request->filled('partner_referral_code')) {
+            [$referralPartner, $referralCampaign] = app(PartnerAttributionService::class)->resolve(
+                (string) $request->input('partner_referral_code'),
+                $request->filled('partner_campaign') ? (string) $request->input('partner_campaign') : null
+            );
+            if (! $referralPartner
+                || ! $referralPartner->isActiveAt()
+                || ($referralCampaign && ! $referralCampaign->isActiveAt())) {
+                $assistance = app(PartnerDiscoveryService::class)->assistReferralCode(
+                    (string) $request->input('partner_referral_code')
+                );
+
+                return response()->json([
+                    'error' => 'Referral code not found',
+                    'messages' => [
+                        'partner_referral_code' => ['Choose a suggested referral code or check the spelling.'],
+                    ],
+                    'suggestions' => $assistance['suggestions']->map(fn ($partner): array => [
+                        'display_name' => $partner->display_name,
+                        'referral_code' => $partner->referral_code,
+                    ])->values(),
+                ], 422);
+            }
         }
 
         $emailIn = trim((string) $request->input('email', ''));
         $phoneRaw = trim((string) $request->input('phone', ''));
         $phoneNorm = $phoneRaw !== '' ? IoTeCService::normalizePhone($phoneRaw) : null;
 
+        if ($response = $this->registrationSecurity->registration($request, array_filter([
+            'DISPLAY_NAME' => $request->input('name'),
+            'EMAIL' => $emailIn,
+            'PHONE' => $phoneNorm,
+        ]))) {
+            return $response;
+        }
+
         if ($emailIn !== '') {
             $emailNorm = strtolower($emailIn);
             if (User::whereRaw('LOWER(TRIM(email)) = ?', [$emailNorm])->exists()) {
                 return response()->json([
-                    'error' => 'Email already registered'
+                    'error' => 'Email already registered',
                 ], 422);
             }
         }
@@ -162,9 +230,9 @@ class AuthController extends Controller
         }
 
         $customerRole = Role::where('name', 'customer')->first();
-        if (!$customerRole) {
+        if (! $customerRole) {
             return response()->json([
-                'error' => 'Customer role not found'
+                'error' => 'Customer role not found',
             ], 500);
         }
 
@@ -191,9 +259,14 @@ class AuthController extends Controller
             'plan_status' => 'NONE',
             'email_verified_at' => ($this->verificationCodesRequired() && ! $phoneOnlyRegister) ? null : now(),
         ]);
+        $this->registrationSecurity->stampNewUser($user, $request);
+        app(PartnerAttributionService::class)->attributeFromRequest($user, $request, 'registration_selection');
+        if ($request->boolean('partner_interest')) {
+            app(PartnerApplicationService::class)->apply($user, ['display_name' => $user->name]);
+        }
 
         if (! $this->verificationCodesRequired() || $phoneOnlyRegister) {
-            $token = $user->createToken('auth_token')->plainTextToken;
+            $token = $this->authSessions->issue($user, 'app');
 
             event(new UserRegistered($user));
 
@@ -236,7 +309,7 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
@@ -245,9 +318,9 @@ class AuthController extends Controller
             ->where('used', false)
             ->first();
 
-        if (!$verificationCode || !$verificationCode->isValid()) {
+        if (! $verificationCode || ! $verificationCode->isValid()) {
             return response()->json([
-                'error' => 'Invalid or expired verification code'
+                'error' => 'Invalid or expired verification code',
             ], 422);
         }
 
@@ -256,9 +329,9 @@ class AuthController extends Controller
 
         // Verify user
         $user = User::where('email', $request->email)->first();
-        if (!$user) {
+        if (! $user) {
             return response()->json([
-                'error' => 'User not found'
+                'error' => 'User not found',
             ], 404);
         }
 
@@ -269,7 +342,7 @@ class AuthController extends Controller
         event(new UserRegistered($user));
 
         // Generate token
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->authSessions->issue($user, 'app');
 
         return response()->json([
             'message' => 'Email verified successfully',
@@ -289,36 +362,36 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
         $user = User::where('email', $request->email)->first();
-        if (!$user) {
+        if (! $user) {
             return response()->json([
-                'error' => 'User not found'
+                'error' => 'User not found',
             ], 404);
         }
 
         if ($user->email_verified_at) {
             return response()->json([
-                'error' => 'Email already verified'
+                'error' => 'Email already verified',
             ], 422);
         }
 
         // Generate new code
         $verificationCode = EmailVerificationCode::createForEmail($user->email);
-        
+
         $emailSent = EmailService::sendVerificationCode($user->email, $verificationCode->code);
-        
-        if (!$emailSent) {
+
+        if (! $emailSent) {
             return response()->json([
-                'error' => 'Failed to send verification email'
+                'error' => 'Failed to send verification email',
             ], 500);
         }
 
         return response()->json([
-            'message' => 'Verification code resent successfully'
+            'message' => 'Verification code resent successfully',
         ]);
     }
 
@@ -344,7 +417,7 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
@@ -363,17 +436,25 @@ class AuthController extends Controller
             }
         }
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (! $user || ! Hash::check($request->password, $user->password)) {
             return response()->json([
-                'error' => 'Invalid credentials'
+                'error' => 'Invalid credentials',
             ], 401);
+        }
+
+        if ($response = $this->registrationSecurity->login($request, $user, array_filter([
+            'DISPLAY_NAME' => $user->name,
+            'EMAIL' => $user->email,
+            'PHONE' => $user->phone,
+        ]))) {
+            return $response;
         }
 
         // Allow login even if email is not verified, but mark it
         // Frontend will handle showing verification prompt
 
         // Generate token
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->authSessions->issue($user, 'app');
 
         return response()->json([
             'message' => 'Login successful',
@@ -393,10 +474,10 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         $user = Auth::user();
-        
-        if (!$user) {
+
+        if (! $user) {
             return response()->json([
-                'error' => 'Unauthorized'
+                'error' => 'Unauthorized',
             ], 401);
         }
 
@@ -405,7 +486,7 @@ class AuthController extends Controller
             ->where('status', 'ACTIVE')
             ->where('expires_at', '<=', now())
             ->update(['status' => 'EXPIRED']);
-        
+
         // Get active subscription
         $activeSubscription = \App\Models\UserSubscription::where('user_id', $user->id)
             ->where('status', 'ACTIVE')
@@ -420,9 +501,9 @@ class AuthController extends Controller
             && strtoupper((string) $user->plan_status) === 'ACTIVE'
             && strtoupper((string) $user->plan) !== 'FREE'
             && (! $user->renewal_date || $user->renewal_date->isFuture());
-        
+
         // Update user's plan_status if no active subscription but user table says ACTIVE
-        if (!$activeSubscription && !$manualPlanIsActive && $user->plan_status === 'ACTIVE') {
+        if (! $activeSubscription && ! $manualPlanIsActive && $user->plan_status === 'ACTIVE') {
             $user->update([
                 'plan_status' => 'NONE',
                 'plan' => 'FREE',
@@ -430,7 +511,7 @@ class AuthController extends Controller
             ]);
             $user->refresh();
         }
-            
+
         // Check for pending subscription payment
         $pendingSubscription = \App\Models\PaymentTransaction::where('user_id', $user->id)
             ->where('type', 'SUBSCRIPTION')
@@ -443,7 +524,7 @@ class AuthController extends Controller
         $planDisplayName = $user->plan; // Default to ENUM value
         $planStatus = 'NONE'; // Default to NONE if no active subscription
         $renewalDate = null;
-        
+
         if ($pendingSubscription) {
             $planDisplayName = $pendingSubscription->subscriptionPlan->name ?? $user->plan;
             $planStatus = 'PENDING';
@@ -462,7 +543,7 @@ class AuthController extends Controller
                 ->where('expires_at', '<=', now())
                 ->latest()
                 ->first();
-            
+
             if ($expiredSubscription) {
                 // Update expired subscription status
                 $expiredSubscription->update(['status' => 'EXPIRED']);
@@ -491,15 +572,66 @@ class AuthController extends Controller
                 'role' => $user->role ? $user->role->name : 'customer',
                 'is_creator' => $user->isCreator(),
                 'has_creator_workspace' => $user->hasCreatorWorkspace(),
+                'is_partner' => $user->isPartner(),
+                'has_partner_workspace' => $user->isPartner(),
+                'partner_profile' => $user->partnerProfile ? [
+                    'id' => $user->partnerProfile->id,
+                    'display_name' => $user->partnerProfile->display_name,
+                    'slug' => $user->partnerProfile->slug,
+                    'referral_code' => $user->partnerProfile->referral_code,
+                    'status' => $user->partnerProfile->status,
+                ] : null,
                 'creator_application' => $this->formatCreatorApplication($user),
-            ]
+            ],
+        ]);
+    }
+
+    /**
+     * Exchange a refresh token for a newly rotated session. A refresh token is
+     * one-time use so parallel client requests cannot keep replaying it.
+     */
+    public function refresh(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'refresh_token' => 'required|string|max:255',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'A refresh token is required.',
+                'code' => 'INVALID_REFRESH_TOKEN',
+            ], 401);
+        }
+
+        $rotated = $this->authSessions->rotate((string) $request->input('refresh_token'));
+        if (! $rotated) {
+            return response()->json([
+                'error' => 'This session has expired. Sign in again.',
+                'code' => 'INVALID_REFRESH_TOKEN',
+            ], 401);
+        }
+        if ($response = $this->accountSecurity->blockingResponse($rotated['user'])) {
+            $this->accountSecurity->revokeSessions($rotated['user']);
+
+            return $response;
+        }
+
+        return response()->json([
+            'message' => 'Session refreshed',
+            'data' => $this->buildAuthPayload(
+                $rotated['user'],
+                $rotated['session'],
+                'refresh',
+                false,
+                false,
+            ),
         ]);
     }
 
     private function formatCreatorApplication(\App\Models\User $user): ?array
     {
         $application = $user->creatorApplication;
-        if (!$application) {
+        if (! $application) {
             return null;
         }
         $pendingRequestId = $application->informationRequests()
@@ -508,14 +640,14 @@ class AuthController extends Controller
             ->value('id');
 
         return [
-            'id'               => $application->id,
-            'creator_type'     => $application->creator_type,
-            'display_name'     => $application->display_name,
-            'status'           => $application->status,
+            'id' => $application->id,
+            'creator_type' => $application->creator_type,
+            'display_name' => $application->display_name,
+            'status' => $application->status,
             'rejection_reason' => $application->rejection_reason,
-            'submitted_at'     => $application->submitted_at?->toIso8601String(),
-            'resubmitted_at'   => $application->resubmitted_at?->toIso8601String(),
-            'reviewed_at'      => $application->reviewed_at?->toIso8601String(),
+            'submitted_at' => $application->submitted_at?->toIso8601String(),
+            'resubmitted_at' => $application->resubmitted_at?->toIso8601String(),
+            'reviewed_at' => $application->reviewed_at?->toIso8601String(),
             'pending_request_id' => $pendingRequestId,
             'action_url' => $pendingRequestId
                 ? "/creator/application?request={$pendingRequestId}"
@@ -529,23 +661,23 @@ class AuthController extends Controller
     public function updateProfile(Request $request)
     {
         $user = Auth::user();
-        
-        if (!$user) {
+
+        if (! $user) {
             return response()->json([
-                'error' => 'Unauthorized'
+                'error' => 'Unauthorized',
             ], 401);
         }
 
         $validator = Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
-            'email' => 'sometimes|required|string|email|max:255|unique:users,email,' . $user->id,
+            'email' => 'sometimes|required|string|email|max:255|unique:users,email,'.$user->id,
             'phone' => 'nullable|string|max:255',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
@@ -563,7 +695,7 @@ class AuthController extends Controller
                 'planStatus' => $user->plan_status,
                 'renewalDate' => $user->renewal_date?->format('Y-m-d'),
                 'emailVerified' => (bool) $user->email_verified_at,
-            ]
+            ],
         ]);
     }
 
@@ -573,21 +705,21 @@ class AuthController extends Controller
     public function deleteAccount(Request $request)
     {
         $user = Auth::user();
-        
-        if (!$user) {
+
+        if (! $user) {
             return response()->json([
-                'error' => 'Unauthorized'
+                'error' => 'Unauthorized',
             ], 401);
         }
 
         // Delete all user tokens
         $user->tokens()->delete();
-        
+
         // Delete user account
         $user->delete();
 
         return response()->json([
-            'message' => 'Account deleted successfully'
+            'message' => 'Account deleted successfully',
         ]);
     }
 
@@ -596,11 +728,34 @@ class AuthController extends Controller
      */
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
+        $this->authSessions->revokeCurrentSession($request->user());
 
         return response()->json([
-            'message' => 'Logged out successfully'
+            'message' => 'Logged out successfully',
         ]);
+    }
+
+    public function changePassword(Request $request)
+    {
+        $validated = $request->validate([
+            'current_password' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $user = $request->user();
+        if (! Hash::check($validated['current_password'], $user->password)) {
+            return response()->json([
+                'error' => 'The current password is incorrect.',
+                'code' => 'CURRENT_PASSWORD_INVALID',
+            ], 422);
+        }
+
+        $user->forceFill(['password' => Hash::make($validated['password'])])->save();
+        // A password change is a security boundary: revoke every device and
+        // require a fresh sign-in everywhere.
+        $user->tokens()->delete();
+
+        return response()->json(['message' => 'Password changed successfully.']);
     }
 
     /**
@@ -620,27 +775,37 @@ class AuthController extends Controller
             $googleUser = Socialite::driver('google')->stateless()->user();
 
             // Reuse shared handler for Google auth
-            [$user, $isNewUser] = $this->findOrCreateUserFromGoogleUser($googleUser);
+            [$user, $isNewUser] = $this->findOrCreateUserFromGoogleUser($googleUser, $request);
+            if ($isNewUser) {
+                app(PartnerAttributionService::class)->attributeFromRequest($user, $request, 'referral_link');
+            }
 
-            // Generate token
-            $token = $user->createToken('auth_token')->plainTextToken;
+            // The callback currently transports the bearer through a one-time
+            // redirect. Do not expose a longer-lived refresh token in the URL.
+            $token = $user->createToken('web_google')->plainTextToken;
 
             // Redirect to frontend with token
             $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
-            return redirect("{$frontendUrl}/auth/callback?token={$token}&user=" . urlencode(json_encode([
+
+            return redirect("{$frontendUrl}/auth/callback?token={$token}&new=".($isNewUser ? '1' : '0').'&user='.urlencode(json_encode([
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
             ])));
 
+        } catch (HttpResponseException $e) {
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            return redirect("{$frontendUrl}/auth/callback?error=account_access_unavailable");
         } catch (\Exception $e) {
-            \Log::error('Google OAuth error: ' . $e->getMessage(), [
+            \Log::error('Google OAuth error: '.$e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
             ]);
             $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
-            return redirect("{$frontendUrl}/auth/callback?error=" . urlencode($e->getMessage()));
+
+            return redirect("{$frontendUrl}/auth/callback?error=".urlencode($e->getMessage()));
         }
     }
 
@@ -650,10 +815,11 @@ class AuthController extends Controller
     public function getGoogleAuthUrl()
     {
         $url = Socialite::driver('google')->stateless()->redirect()->getTargetUrl();
+
         return response()->json([
             'data' => [
-                'url' => $url
-            ]
+                'url' => $url,
+            ],
         ]);
     }
 
@@ -669,16 +835,16 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
         $user = User::where('email', $request->email)->first();
-        
-        if (!$user) {
+
+        if (! $user) {
             // Don't reveal if user exists or not for security
             return response()->json([
-                'message' => 'If an account exists with this email, a password reset link has been sent.'
+                'message' => 'If an account exists with this email, a password reset link has been sent.',
             ]);
         }
 
@@ -689,17 +855,17 @@ class AuthController extends Controller
         $emailSent = EmailService::send($user->email, 'password_reset', [
             'email' => $user->email,
             'token' => $passwordReset->token,
-            'reset_url' => (config('app.frontend_url') ?? env('FRONTEND_URL', 'http://localhost:3000')) . '/reset-password?token=' . $passwordReset->token . '&email=' . urlencode($user->email),
+            'reset_url' => (config('app.frontend_url') ?? env('FRONTEND_URL', 'http://localhost:3000')).'/reset-password?token='.$passwordReset->token.'&email='.urlencode($user->email),
         ]);
-        
-        if (!$emailSent) {
+
+        if (! $emailSent) {
             return response()->json([
-                'error' => 'Failed to send password reset email'
+                'error' => 'Failed to send password reset email',
             ], 500);
         }
 
         return response()->json([
-            'message' => 'If an account exists with this email, a password reset link has been sent.'
+            'message' => 'If an account exists with this email, a password reset link has been sent.',
         ]);
     }
 
@@ -717,23 +883,23 @@ class AuthController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'error' => 'Validation failed',
-                'messages' => $validator->errors()
+                'messages' => $validator->errors(),
             ], 422);
         }
 
         $passwordReset = PasswordReset::findByToken($request->token);
 
-        if (!$passwordReset || !$passwordReset->isValid() || $passwordReset->email !== $request->email) {
+        if (! $passwordReset || ! $passwordReset->isValid() || $passwordReset->email !== $request->email) {
             return response()->json([
-                'error' => 'Invalid or expired reset token'
+                'error' => 'Invalid or expired reset token',
             ], 422);
         }
 
         $user = User::where('email', $request->email)->first();
-        
-        if (!$user) {
+
+        if (! $user) {
             return response()->json([
-                'error' => 'User not found'
+                'error' => 'User not found',
             ], 404);
         }
 
@@ -749,7 +915,7 @@ class AuthController extends Controller
         $user->tokens()->delete();
 
         return response()->json([
-            'message' => 'Password reset successful. Please login with your new password.'
+            'message' => 'Password reset successful. Please login with your new password.',
         ]);
     }
 
@@ -760,6 +926,9 @@ class AuthController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'access_token' => 'required|string',
+            'partner_referral_code' => 'nullable|string|max:64',
+            'partner_campaign' => 'nullable|string|max:128',
+            'discovery_source' => 'nullable|string|max:64',
         ]);
 
         if ($validator->fails()) {
@@ -772,16 +941,25 @@ class AuthController extends Controller
         try {
             $googleUser = Socialite::driver('google')->stateless()->userFromToken($request->input('access_token'));
 
-            [$user, $isNewUser] = $this->findOrCreateUserFromGoogleUser($googleUser);
+            [$user, $isNewUser] = $this->findOrCreateUserFromGoogleUser($googleUser, $request);
+            if ($isNewUser) {
+                app(PartnerAttributionService::class)->attributeFromRequest(
+                    $user,
+                    $request,
+                    $this->partnerAttributionMethod($request)
+                );
+            }
 
-            $token = $user->createToken('auth_token')->plainTextToken;
+            $token = $this->authSessions->issue($user, 'app');
 
             return response()->json([
                 'message' => 'Login successful via Google',
                 'data' => $this->buildAuthPayload($user, $token, 'google', $isNewUser, false),
             ]);
+        } catch (HttpResponseException $e) {
+            return $e->getResponse();
         } catch (\Exception $e) {
-            \Log::error('Google mobile OAuth error: ' . $e->getMessage(), [
+            \Log::error('Google mobile OAuth error: '.$e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
@@ -880,6 +1058,14 @@ class AuthController extends Controller
 
         $mvp = ! $this->verificationCodesRequired();
 
+        if ($response = $this->registrationSecurity->registration($request, array_filter([
+            'DISPLAY_NAME' => $name,
+            'EMAIL' => $email,
+            'PHONE' => $phone,
+        ]))) {
+            throw new HttpResponseException($response);
+        }
+
         $user = User::create([
             'name' => $name,
             'email' => $email,
@@ -890,6 +1076,7 @@ class AuthController extends Controller
             'plan_status' => 'NONE',
             'email_verified_at' => $mvp ? now() : ($request->filled('email') ? now() : null),
         ]);
+        $this->registrationSecurity->stampNewUser($user, $request, 'PHONE_REGISTRATION');
 
         return [$user, true];
     }
@@ -940,6 +1127,17 @@ class AuthController extends Controller
 
         try {
             [$user, $isNewUser] = $this->findOrCreateUserForPhoneAuth($phone, $request);
+            if ($isNewUser) {
+                app(PartnerAttributionService::class)->attributeFromRequest($user, $request, 'referral_link');
+            } elseif ($response = $this->registrationSecurity->login($request, $user, array_filter([
+                'DISPLAY_NAME' => $user->name,
+                'EMAIL' => $user->email,
+                'PHONE' => $user->phone,
+            ]))) {
+                return $response;
+            }
+        } catch (HttpResponseException $e) {
+            return $e->getResponse();
         } catch (\RuntimeException $e) {
             return response()->json([
                 'error' => $e->getMessage(),
@@ -954,7 +1152,7 @@ class AuthController extends Controller
             }
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->authSessions->issue($user, 'app');
 
         return response()->json([
             'message' => 'Login successful via phone',
@@ -979,6 +1177,9 @@ class AuthController extends Controller
             'first_name' => 'sometimes|nullable|string|max:255',
             'last_name' => 'sometimes|nullable|string|max:255',
             'full_name' => 'sometimes|nullable|array',
+            'partner_referral_code' => 'nullable|string|max:64',
+            'partner_campaign' => 'nullable|string|max:128',
+            'discovery_source' => 'nullable|string|max:64',
         ]);
 
         if ($validator->fails()) {
@@ -1017,8 +1218,20 @@ class AuthController extends Controller
         $isNewUser = false;
         $user = $social?->user;
 
-        if (!$user && $email) {
+        if (! $user && $email) {
             $user = User::where('email', $email)->first();
+        }
+
+        $appleIdentities = array_filter([
+            'DISPLAY_NAME' => $name,
+            'EMAIL' => $email,
+            'APPLE_SUB' => $appleUserId,
+        ]);
+        $appleSecurityResponse = $user
+            ? $this->registrationSecurity->login($request, $user, $appleIdentities)
+            : $this->registrationSecurity->registration($request, $appleIdentities);
+        if ($appleSecurityResponse) {
+            return $appleSecurityResponse;
         }
 
         if ($user && $email) {
@@ -1035,9 +1248,9 @@ class AuthController extends Controller
             }
         }
 
-        if (!$user) {
+        if (! $user) {
             $customerRole = Role::where('name', 'customer')->first();
-            if (!$customerRole) {
+            if (! $customerRole) {
                 return response()->json([
                     'error' => 'Customer role not found',
                 ], 500);
@@ -1054,6 +1267,12 @@ class AuthController extends Controller
             ]);
 
             $isNewUser = true;
+            $this->registrationSecurity->stampNewUser($user, $request, 'APPLE_REGISTRATION');
+            app(PartnerAttributionService::class)->attributeFromRequest(
+                $user,
+                $request,
+                $this->partnerAttributionMethod($request)
+            );
 
             if ($email) {
                 EmailService::sendWelcome($user->email, $user->name);
@@ -1074,12 +1293,19 @@ class AuthController extends Controller
             ]
         );
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->authSessions->issue($user, 'app');
 
         return response()->json([
             'message' => 'Login successful via Apple',
             'data' => $this->buildAuthPayload($user, $token, 'apple', $isNewUser, false),
         ]);
+    }
+
+    protected function partnerAttributionMethod(Request $request): string
+    {
+        return $request->input('discovery_source') === 'partner_selection'
+            ? 'registration_selection'
+            : 'referral_link';
     }
 
     protected function verifyAppleIdentityToken(string $identityToken): array
@@ -1159,7 +1385,7 @@ class AuthController extends Controller
      *
      * @return array{0: User, 1: bool} [user, isNewUser]
      */
-    protected function findOrCreateUserFromGoogleUser($googleUser): array
+    protected function findOrCreateUserFromGoogleUser($googleUser, Request $request): array
     {
         $isNewUser = false;
 
@@ -1175,22 +1401,34 @@ class AuthController extends Controller
 
         $user = $social?->user;
 
-        if (!$user && $email) {
-            $user = User::where('email', $email)->first();
+        if (! $user && $email) {
+            $user = User::whereRaw('LOWER(TRIM(email)) = ?', [mb_strtolower(trim($email))])->first();
+        }
+
+        $identities = array_filter([
+            'DISPLAY_NAME' => $googleUser->getName(),
+            'EMAIL' => $email,
+            'GOOGLE_SUB' => $googleId,
+        ]);
+        $securityResponse = $user
+            ? $this->registrationSecurity->login($request, $user, $identities)
+            : $this->registrationSecurity->registration($request, $identities, true);
+        if ($securityResponse) {
+            throw new HttpResponseException($securityResponse);
         }
 
         if ($user) {
             // Update avatar if available
-            if ($googleUser->getAvatar() && !$user->avatar) {
+            if ($googleUser->getAvatar() && ! $user->avatar) {
                 $user->update(['avatar' => $googleUser->getAvatar()]);
             }
             // Verify email for Google OAuth users (Google emails are pre-verified)
-            if (!$user->email_verified_at) {
+            if (! $user->email_verified_at) {
                 $user->update(['email_verified_at' => now()]);
             }
         } else {
             $customerRole = Role::where('name', 'customer')->first();
-            if (!$customerRole) {
+            if (! $customerRole) {
                 abort(500, 'Customer role not found');
             }
 
@@ -1206,6 +1444,7 @@ class AuthController extends Controller
             ]);
 
             $isNewUser = true;
+            $this->registrationSecurity->stampNewUser($user, $request, 'GOOGLE_REGISTRATION');
 
             if ($user->email) {
                 EmailService::sendWelcome($user->email, $user->name);
@@ -1318,13 +1557,23 @@ class AuthController extends Controller
             ], 404);
         }
 
+        if ($response = $this->accountSecurity->blockingResponse($user)) {
+            $bridge->update([
+                'used_at' => now(),
+                'consumed_ip' => $request->ip(),
+                'consumed_user_agent' => Str::limit((string) $request->userAgent(), 1000, ''),
+            ]);
+
+            return $response;
+        }
+
         $bridge->update([
             'used_at' => now(),
             'consumed_ip' => $request->ip(),
             'consumed_user_agent' => Str::limit((string) $request->userAgent(), 1000, ''),
         ]);
 
-        $token = $user->createToken('web_bridge_token')->plainTextToken;
+        $token = $this->authSessions->issue($user, 'web');
         $nextPath = $this->normalizeBridgeNextPath($request->input('next_path') ?: $bridge->next_path);
 
         return response()->json([

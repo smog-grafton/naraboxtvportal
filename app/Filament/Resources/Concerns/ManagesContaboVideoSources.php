@@ -7,6 +7,7 @@ use App\Models\VideoSource;
 use App\Services\ContaboObjectStorageService;
 use App\Services\MediaSourceSelectionService;
 use App\Services\NbxVideoSourceService;
+use App\Services\Storage\AutomaticStorageSelector;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -15,7 +16,11 @@ trait ManagesContaboVideoSources
     private function createOrUpdateContaboObjectStorageSource(?VideoSource $record, array $data, string $assetType): VideoSource
     {
         $owner = $this->getOwnerRecord();
-        $service = app(ContaboObjectStorageService::class);
+        $requestedTargetKey = (string) ($data['nbx_storage_target'] ?? $record?->storage_target_key ?? 'auto');
+        $expectedBytes = isset($data['file_size']) ? (int) $data['file_size'] : 0;
+        $resolution = app(AutomaticStorageSelector::class)->resolve($requestedTargetKey, $expectedBytes);
+        $resolvedTargetKey = $resolution['target']->key;
+        $service = app(ContaboObjectStorageService::class)->forTarget($resolvedTargetKey);
         $remoteUrl = trim((string) ($data['url'] ?? ''));
         $uploadPath = $this->normalizeContaboUploadState($data['file_path'] ?? $record?->file_path ?? '');
         $publicUrl = '';
@@ -60,7 +65,7 @@ trait ManagesContaboVideoSources
                 );
 
                 if (! ($result['ok'] ?? false)) {
-                    throw new \RuntimeException((string) ($result['error'] ?? 'Contabo Object Storage upload failed.'));
+                    throw new \RuntimeException((string) ($result['error'] ?? 'Object-storage upload failed.'));
                 }
 
                 Storage::disk('public')->delete($uploadPath);
@@ -69,7 +74,7 @@ trait ManagesContaboVideoSources
                 $objectKey = isset($result['key']) ? (string) $result['key'] : null;
                 $fileSize = isset($result['file_size']) ? (int) $result['file_size'] : $fileSize;
             } else {
-                throw new \RuntimeException('The uploaded file could not be found on the Contabo or public disk.');
+                throw new \RuntimeException('The uploaded file could not be found on the selected object storage target or public disk.');
             }
         } elseif ($record) {
             $recordMetadata = (array) ($record->metadata ?? []);
@@ -78,7 +83,7 @@ trait ManagesContaboVideoSources
         }
 
         if ($publicUrl === '') {
-            throw new \RuntimeException('Add a Contabo public URL, a remote URL to fetch, or a video file to upload.');
+            throw new \RuntimeException('Add an object-storage public URL, a remote URL to fetch, or a video file to upload.');
         }
 
         $resolvedFormat = (string) ($data['format'] ?? '');
@@ -87,11 +92,13 @@ trait ManagesContaboVideoSources
         }
 
         $metadata = array_merge((array) ($record?->metadata ?? []), (array) ($data['metadata'] ?? []), [
-            'provider' => 'contabo_object_storage',
+            'provider' => $service->target()->provider,
             'fetch_status' => 'completed',
             'fetch_mode' => $sourceMode,
-            'storage_target' => 'contabo_object_storage',
-            'last_message' => 'Video source stored on Contabo Object Storage.',
+            'storage_target' => 'object_storage',
+            'storage_target_key' => $service->targetKey(),
+            'storage_target_label' => $service->target()->label,
+            'last_message' => 'Video source stored on '.$service->target()->label.'.',
             'source_url' => $remoteUrl !== '' ? $remoteUrl : null,
             'object_key' => $objectKey,
             'bucket' => $service->bucket(),
@@ -110,7 +117,7 @@ trait ManagesContaboVideoSources
             'quality' => (string) ($data['quality'] ?? $record?->quality ?? 'auto'),
             'format' => strtolower($resolvedFormat),
             'media_role' => strtolower($resolvedFormat) === 'm3u8' ? 'hls_master' : 'playback_progressive',
-            'server_key' => 'contabo',
+            'server_key' => $service->target()->provider === 'cloudflare_r2' ? 'r2' : 'contabo',
             'source_group' => 'contabo:'.$owner::class.':'.$owner->id,
             'quality_label' => strtolower($resolvedFormat) === 'm3u8' ? 'auto' : (string) ($data['quality'] ?? $record?->quality ?? 'auto'),
             'file_size' => $fileSize ?: $record?->file_size,
@@ -120,6 +127,7 @@ trait ManagesContaboVideoSources
             'storage_disk' => $service->diskName(),
             'storage_bucket' => $service->bucket(),
             'storage_object_key' => $objectKey,
+            'storage_target_key' => $service->targetKey(),
             'metadata' => $metadata,
         ];
 
@@ -149,11 +157,13 @@ trait ManagesContaboVideoSources
         $quality = (string) ($data['quality'] ?? $record?->quality ?? 'auto');
         $format = (string) ($data['format'] ?? $record?->format ?? 'mp4');
         $metadata = array_merge((array) ($record?->metadata ?? []), (array) ($data['metadata'] ?? []), [
-            'provider' => 'contabo_object_storage',
+            'provider' => $service->target()->provider,
             'fetch_status' => 'queued',
             'fetch_mode' => 'queue',
-            'storage_target' => 'contabo_object_storage',
-            'last_message' => 'Contabo Object Storage fetch queued.',
+            'storage_target' => 'object_storage',
+            'storage_target_key' => $service->targetKey(),
+            'storage_target_label' => $service->target()->label,
+            'last_message' => $service->target()->label.' fetch queued.',
             'source_url' => $remoteUrl,
             'bucket' => $service->bucket(),
             'endpoint' => $service->endpoint(),
@@ -171,6 +181,7 @@ trait ManagesContaboVideoSources
             'duration_seconds' => $data['duration_seconds'] ?? $record?->duration_seconds,
             'is_primary' => (bool) ($data['is_primary'] ?? $record?->is_primary ?? false),
             'is_active' => false,
+            'storage_target_key' => $service->targetKey(),
             'metadata' => $metadata,
         ];
 
@@ -188,7 +199,8 @@ trait ManagesContaboVideoSources
             (int) $owner->id,
             $quality,
             $format,
-            'contabo_object_storage'
+            'contabo_object_storage',
+            $service->targetKey()
         )->onQueue('contabo-imports');
 
         return $videoSource;
@@ -242,11 +254,51 @@ trait ManagesContaboVideoSources
                 'nbx_storage_registration_failed_at' => now()->toIso8601String(),
             ]);
             VideoSource::withoutEvents(fn () => $source->forceFill(['metadata' => $metadata])->save());
-            Log::warning('Direct Contabo source registration with NBX failed', [
+            Log::warning('Direct object-storage source registration with NBX failed', [
                 'video_source_id' => $source->id,
                 'object_key' => $source->storage_object_key,
                 'error' => $exception->getMessage(),
             ]);
         }
+    }
+
+    private function objectStorageServiceForSource(VideoSource $record): ContaboObjectStorageService
+    {
+        $metadata = (array) ($record->metadata ?? []);
+        $targetKey = $record->storage_target_key
+            ?: ($metadata['storage_target_key'] ?? $metadata['nbx']['storage_target'] ?? null)
+            ?: app(\App\Services\Storage\StorageTargetRegistry::class)->legacyKey();
+
+        return app(ContaboObjectStorageService::class)->forTarget((string) $targetKey);
+    }
+
+    private function objectStorageUrlForSource(VideoSource $record): string
+    {
+        $metadata = is_array($record->metadata) ? $record->metadata : [];
+
+        return (string) ($record->url ?: $record->file_path ?: ($metadata['public_url'] ?? ''));
+    }
+
+    private function sourceUsesKnownObjectStorageUrl(VideoSource $record): bool
+    {
+        $url = $this->objectStorageUrlForSource($record);
+
+        return $url !== '' && $this->objectStorageServiceForSource($record)->isContaboPublicUrl($url);
+    }
+
+    /**
+     * @return array{key: ?string, url: string, disk: string, size: int|null}
+     */
+    private function objectStorageBackfillPayload(VideoSource $record): array
+    {
+        $service = $this->objectStorageServiceForSource($record);
+        $url = $this->objectStorageUrlForSource($record);
+
+        return [
+            'key' => $service->objectKeyFromPublicUrl($url),
+            'url' => $url,
+            'disk' => $service->diskName(),
+            'size' => $record->file_size,
+        ];
     }
 }

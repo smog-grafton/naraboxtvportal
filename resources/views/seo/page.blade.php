@@ -42,8 +42,8 @@
     <link rel="icon" type="image/png" href="{{ config('app.url') }}/assets/images/logo/nb-white.png">
     
     {{-- Preconnect for performance --}}
-    <link rel="preconnect" href="http://localhost:3000">
-    <link rel="dns-prefetch" href="http://localhost:3000">
+    <link rel="preconnect" href="{{ config('app.frontend_url', 'https://naraboxtv.com') }}">
+    <link rel="dns-prefetch" href="{{ config('app.frontend_url', 'https://naraboxtv.com') }}">
     
     {{-- Next.js will hydrate this --}}
     <style>
@@ -116,7 +116,7 @@
                     nextJsPath = nextJsPath.replace('/vj/', '/vjs/');
                 }
                 
-                const nextJsUrl = 'http://localhost:3000' + nextJsPath + queryString;
+                const nextJsUrl = {{ json_encode(rtrim(config('app.frontend_url', 'https://naraboxtv.com'), '/')) }} + nextJsPath + queryString;
                 
                 // Longer delay to ensure meta tags are read by browser before redirect
                 setTimeout(function() {
@@ -127,4 +127,3 @@
     </script>
 </body>
 </html>
-

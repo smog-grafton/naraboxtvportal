@@ -1,0 +1,967 @@
+name: Authentication
+description: |-
+
+  Register, login, profile, OAuth, password reset, and email verification.
+endpoints:
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/register
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Register a new user'
+      description: 'Returns user and Bearer token. Email is auto-verified by default.'
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      name:
+        custom: []
+        name: name
+        description: 'Must not be greater than 255 characters.'
+        required: true
+        example: b
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address. Must not be greater than 255 characters.'
+        required: true
+        example: zbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      password:
+        custom: []
+        name: password
+        description: 'Must be at least 8 characters.'
+        required: true
+        example: '-0pBNvYgxw'
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      phone:
+        custom: []
+        name: phone
+        description: 'Must not be greater than 255 characters.'
+        required: false
+        example: a
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: true
+        deprecated: false
+    cleanBodyParameters:
+      name: b
+      email: zbailey@example.net
+      password: '-0pBNvYgxw'
+      phone: a
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/login
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Login user with email and password'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address.'
+        required: true
+        example: gbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      password:
+        custom: []
+        name: password
+        description: ''
+        required: true
+        example: '|]|{+-'
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      email: gbailey@example.net
+      password: '|]|{+-'
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/phone/request-otp
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Request phone login OTP.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      phone:
+        custom: []
+        name: phone
+        description: 'Must not be greater than 255 characters.'
+        required: true
+        example: b
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      phone: b
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/phone/verify-otp
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Verify phone OTP and login/register user.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      phone:
+        custom: []
+        name: phone
+        description: 'Must not be greater than 255 characters.'
+        required: true
+        example: b
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      code:
+        custom: []
+        name: code
+        description: 'Must be 6 characters.'
+        required: true
+        example: ngzmiy
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      name:
+        custom: []
+        name: name
+        description: 'Must not be greater than 255 characters.'
+        required: false
+        example: v
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address. Must not be greater than 255 characters.'
+        required: false
+        example: jdach@example.org
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: true
+        deprecated: false
+    cleanBodyParameters:
+      phone: b
+      code: ngzmiy
+      name: v
+      email: jdach@example.org
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/google/mobile
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Handle mobile Google login/register using an access token.'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      access_token:
+        custom: []
+        name: access_token
+        description: ''
+        required: true
+        example: architecto
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      access_token: architecto
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/apple/mobile
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Handle Apple login/register (mobile).'
+      description: |-
+        NOTE: This implementation assumes the mobile app has already obtained and
+        validated the Apple identity token. For production-hardening, wire this
+        to proper server-side Apple token validation.
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      apple_user_id:
+        custom: []
+        name: apple_user_id
+        description: ''
+        required: true
+        example: architecto
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address. Must not be greater than 255 characters.'
+        required: false
+        example: zbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: true
+        deprecated: false
+      name:
+        custom: []
+        name: name
+        description: 'Must not be greater than 255 characters.'
+        required: false
+        example: i
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: true
+        deprecated: false
+    cleanBodyParameters:
+      apple_user_id: architecto
+      email: zbailey@example.net
+      name: i
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/verify-email
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Verify email with code'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address.'
+        required: true
+        example: gbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      code:
+        custom: []
+        name: code
+        description: 'Must be 6 characters.'
+        required: true
+        example: miyvdl
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      email: gbailey@example.net
+      code: miyvdl
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/resend-verification
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Resend verification code'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address.'
+        required: true
+        example: gbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      email: gbailey@example.net
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/forgot-password
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Request password reset'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address.'
+        required: true
+        example: gbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      email: gbailey@example.net
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/reset-password
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Reset password with token'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      email:
+        custom: []
+        name: email
+        description: 'Must be a valid email address.'
+        required: true
+        example: gbailey@example.net
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      token:
+        custom: []
+        name: token
+        description: ''
+        required: true
+        example: architecto
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      password:
+        custom: []
+        name: password
+        description: 'Must be at least 8 characters.'
+        required: true
+        example: ']|{+-0pBNvYg'
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+    cleanBodyParameters:
+      email: gbailey@example.net
+      token: architecto
+      password: ']|{+-0pBNvYg'
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/auth/google/url
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Get Google OAuth URL (for frontend web)'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 200
+        content: '{"data":{"url":"https:\/\/accounts.google.com\/o\/oauth2\/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&scope=openid+profile+email&response_type=code"}}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/auth/google
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Redirect to Google OAuth (web flow)'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 302
+        content: |-
+          <!DOCTYPE html>
+          <html>
+              <head>
+                  <meta charset="UTF-8" />
+                  <meta http-equiv="refresh" content="0;url='https://accounts.google.com/o/oauth2/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&amp;scope=openid+profile+email&amp;response_type=code'" />
+
+                  <title>Redirecting to https://accounts.google.com/o/oauth2/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&amp;scope=openid+profile+email&amp;response_type=code</title>
+              </head>
+              <body>
+                  Redirecting to <a href="https://accounts.google.com/o/oauth2/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&amp;scope=openid+profile+email&amp;response_type=code">https://accounts.google.com/o/oauth2/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&amp;redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&amp;scope=openid+profile+email&amp;response_type=code</a>.
+              </body>
+          </html>
+        headers:
+          cache-control: 'no-cache, private'
+          location: 'https://accounts.google.com/o/oauth2/auth?client_id=220478292100-d7u29dhjlmq5kr0e6sc48e5ji9kbncdi.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fauth%2Fgoogle%2Fcallback&scope=openid+profile+email&response_type=code'
+          content-type: 'text/html; charset=utf-8'
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/auth/google/callback
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Handle Google OAuth callback (web flow)'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 302
+        content: |-
+          <!DOCTYPE html>
+          <html>
+              <head>
+                  <meta charset="UTF-8" />
+                  <meta http-equiv="refresh" content="0;url='http://localhost:3000/auth/callback?error=Client+error%3A+%60POST+https%3A%2F%2Fwww.googleapis.com%2Foauth2%2Fv4%2Ftoken%60+resulted+in+a+%60400+Bad+Request%60+response%3A%0A%7B%0A++%22error%22%3A+%22invalid_request%22%2C%0A++%22error_description%22%3A+%22Missing+required+parameter%3A+code%22%0A%7D%0A'" />
+
+                  <title>Redirecting to http://localhost:3000/auth/callback?error=Client+error%3A+%60POST+https%3A%2F%2Fwww.googleapis.com%2Foauth2%2Fv4%2Ftoken%60+resulted+in+a+%60400+Bad+Request%60+response%3A%0A%7B%0A++%22error%22%3A+%22invalid_request%22%2C%0A++%22error_description%22%3A+%22Missing+required+parameter%3A+code%22%0A%7D%0A</title>
+              </head>
+              <body>
+                  Redirecting to <a href="http://localhost:3000/auth/callback?error=Client+error%3A+%60POST+https%3A%2F%2Fwww.googleapis.com%2Foauth2%2Fv4%2Ftoken%60+resulted+in+a+%60400+Bad+Request%60+response%3A%0A%7B%0A++%22error%22%3A+%22invalid_request%22%2C%0A++%22error_description%22%3A+%22Missing+required+parameter%3A+code%22%0A%7D%0A">http://localhost:3000/auth/callback?error=Client+error%3A+%60POST+https%3A%2F%2Fwww.googleapis.com%2Foauth2%2Fv4%2Ftoken%60+resulted+in+a+%60400+Bad+Request%60+response%3A%0A%7B%0A++%22error%22%3A+%22invalid_request%22%2C%0A++%22error_description%22%3A+%22Missing+required+parameter%3A+code%22%0A%7D%0A</a>.
+              </body>
+          </html>
+        headers:
+          cache-control: 'no-cache, private'
+          location: 'http://localhost:3000/auth/callback?error=Client+error%3A+%60POST+https%3A%2F%2Fwww.googleapis.com%2Foauth2%2Fv4%2Ftoken%60+resulted+in+a+%60400+Bad+Request%60+response%3A%0A%7B%0A++%22error%22%3A+%22invalid_request%22%2C%0A++%22error_description%22%3A+%22Missing+required+parameter%3A+code%22%0A%7D%0A'
+          content-type: 'text/html; charset=utf-8'
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - GET
+    uri: api/v1/auth/me
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Get current authenticated user'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses:
+      -
+        custom: []
+        status: 401
+        content: '{"message":"Unauthenticated."}'
+        headers:
+          cache-control: 'no-cache, private'
+          content-type: application/json
+          access-control-allow-origin: '*'
+          access-control-allow-methods: 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+          access-control-allow-headers: 'Content-Type, Authorization, X-Requested-With, Accept, Origin'
+          access-control-allow-credentials: 'true'
+          access-control-expose-headers: ''
+          vary: Origin
+        description: null
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - PUT
+    uri: api/v1/auth/profile
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Update user profile'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters:
+      name:
+        custom: []
+        name: name
+        description: 'Must not be greater than 255 characters.'
+        required: false
+        example: b
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      email:
+        custom: []
+        name: email
+        description: ''
+        required: false
+        example: null
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: false
+        deprecated: false
+      phone:
+        custom: []
+        name: phone
+        description: 'Must not be greater than 255 characters.'
+        required: false
+        example: 'n'
+        type: string
+        enumValues: []
+        exampleWasSpecified: false
+        nullable: true
+        deprecated: false
+    cleanBodyParameters:
+      name: b
+      phone: 'n'
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - DELETE
+    uri: api/v1/auth/account
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Delete user account'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null
+  -
+    custom: []
+    httpMethods:
+      - POST
+    uri: api/v1/auth/logout
+    metadata:
+      custom: []
+      groupName: Authentication
+      groupDescription: |-
+
+        Register, login, profile, OAuth, password reset, and email verification.
+      subgroup: ''
+      subgroupDescription: ''
+      title: 'Logout user'
+      description: ''
+      authenticated: false
+      deprecated: false
+    headers:
+      Content-Type: application/json
+      Accept: application/json
+      X-API-KEY: FMfcgzQfCMsttJHqsljxCcRXXfdTvGrN
+    urlParameters: []
+    cleanUrlParameters: []
+    queryParameters: []
+    cleanQueryParameters: []
+    bodyParameters: []
+    cleanBodyParameters: []
+    fileParameters: []
+    responses: []
+    responseFields: []
+    auth: []
+    controller: null
+    method: null
+    route: null

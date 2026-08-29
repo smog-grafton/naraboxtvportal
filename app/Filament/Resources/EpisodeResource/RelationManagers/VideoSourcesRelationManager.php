@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\EpisodeResource\RelationManagers;
 
 use App\Filament\Resources\Concerns\ManagesContaboVideoSources;
+use App\Filament\Resources\Concerns\ManagesLegacyCdnMigrations;
 use App\Filament\Resources\Concerns\ManagesNbxVideoSources;
 use App\Filament\Resources\Concerns\ManagesTeleObVideoSources;
 use App\Models\VideoSource;
@@ -23,6 +24,7 @@ use Illuminate\Support\Facades\Storage;
 class VideoSourcesRelationManager extends RelationManager
 {
     use ManagesContaboVideoSources;
+    use ManagesLegacyCdnMigrations;
     use ManagesNbxVideoSources;
     use ManagesTeleObVideoSources;
 
@@ -40,7 +42,8 @@ class VideoSourcesRelationManager extends RelationManager
                         'vimeo' => 'Vimeo',
                         'fetched' => 'Fetched (cURL)',
                         'bunny_stream' => 'Bunny Stream',
-                        'contabo_object_storage' => 'Contabo Object Storage',
+                        'contabo_object_storage' => 'Object Storage (Contabo/R2)',
+                        'legacy_cdn' => 'Legacy CDN (migrate to NBX)',
                         'nbx-engine' => 'NBX Engine',
                         'tele_ob' => 'Tele-OB (Telegram via NBX)',
                     ])
@@ -51,13 +54,14 @@ class VideoSourcesRelationManager extends RelationManager
                     ->label('Video URL')
                     ->url()
                     ->maxLength(2048)
-                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'bunny_stream', 'contabo_object_storage', 'nbx-engine', 'tele_ob']))
-                    ->required(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'tele_ob'], true)
+                    ->visible(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'bunny_stream', 'contabo_object_storage', 'legacy_cdn', 'nbx-engine', 'tele_ob']))
+                    ->required(fn (Forms\Get $get) => in_array($get('type'), ['url', 'youtube', 'vimeo', 'fetched', 'legacy_cdn', 'tele_ob'], true)
                         || ($get('type') === 'nbx-engine' && empty($get('file_path'))))
                     ->helperText(fn (Forms\Get $get) => match ($get('type')) {
                         'fetched' => 'Enter the video URL to fetch and download',
                         'bunny_stream' => 'Paste an existing Bunny Stream URL, or leave this empty and upload a file below.',
-                        'contabo_object_storage' => 'Paste a remote video URL to fetch into Contabo, a Contabo public URL, or leave empty and upload below.',
+                        'contabo_object_storage' => 'Paste a remote video URL to fetch into the selected object-storage target, an existing public object URL, or leave empty and upload below.',
+                        'legacy_cdn' => 'Paste the existing public /media/{asset}/{source}/... URL from the old CDN. Portal will resolve it and send that stored copy to NBX.',
                         'nbx-engine' => 'Paste a remote video URL, or leave empty and upload below. NBX Engine will process it on the CDN VPS.',
                         'tele_ob' => 'Paste a Telegram message URL. NBX asks Teletyde to fetch it, then pulls the signed temporary source and processes it.',
                         default => 'Enter the video URL',
@@ -109,6 +113,11 @@ class VideoSourcesRelationManager extends RelationManager
 
                                             return;
                                         }
+                                        if ($sourceType === 'legacy_cdn') {
+                                            $this->submitLegacyCdnFetchFromForm($set, $get, 'episode');
+
+                                            return;
+                                        }
                                         $storageTarget = $sourceType === 'contabo_object_storage' ? 'contabo_object_storage' : 'cdn';
 
                                         $existingSource = VideoSource::where('sourceable_type', $sourceableType)
@@ -146,6 +155,7 @@ class VideoSourcesRelationManager extends RelationManager
                                             'format' => $format,
                                             'import_mode' => 'now',
                                             'storage_target' => $storageTarget,
+                                            'storage_target_key' => (string) ($get('nbx_storage_target') ?? 'auto'),
                                         ]);
 
                                         $response = $fetchController->fetch($request);
@@ -183,7 +193,7 @@ class VideoSourcesRelationManager extends RelationManager
                                             Notification::make()
                                                 ->success()
                                                 ->title('Video Fetched Successfully')
-                                                ->body(($storageTarget === 'contabo_object_storage' ? 'Video has been saved to Contabo Object Storage. File size: ' : 'Video has been downloaded and saved to the database. File size: ').$this->formatBytes(isset($videoSource['file_size']) ? (int) $videoSource['file_size'] : null))
+                                                ->body(($storageTarget === 'contabo_object_storage' ? 'Video has been saved to object storage. File size: ' : 'Video has been downloaded and saved to the database. File size: ').$this->formatBytes(isset($videoSource['file_size']) ? (int) $videoSource['file_size'] : null))
                                                 ->send();
                                         } else {
                                             if ($existingSource) {
@@ -275,6 +285,7 @@ class VideoSourcesRelationManager extends RelationManager
                                         'format' => $format,
                                         'import_mode' => 'queue',
                                         'storage_target' => $storageTarget,
+                                        'storage_target_key' => (string) ($get('nbx_storage_target') ?? 'auto'),
                                     ]);
 
                                     $response = $fetchController->fetch($request);
@@ -356,10 +367,12 @@ class VideoSourcesRelationManager extends RelationManager
                     ])
                     ->default('mp4')
                     ->required(),
+                $this->storageTargetField()
+                    ->visible(fn (Forms\Get $get): bool => in_array($get('type'), ['contabo_object_storage', 'legacy_cdn', 'nbx-engine', 'tele_ob'], true)),
                 Forms\Components\Section::make('NBX Engine Options')
                     ->schema($this->nbxProcessingFields())
                     ->columns(2)
-                    ->visible(fn (Forms\Get $get): bool => in_array($get('type'), ['nbx-engine', 'tele_ob'], true))
+                    ->visible(fn (Forms\Get $get): bool => in_array($get('type'), ['legacy_cdn', 'nbx-engine', 'tele_ob'], true))
                     ->collapsible(),
                 Forms\Components\TextInput::make('file_size')
                     ->label('File Size (bytes)')
@@ -398,6 +411,20 @@ class VideoSourcesRelationManager extends RelationManager
                         'vimeo' => 'warning',
                         default => 'gray',
                     }),
+                Tables\Columns\TextColumn::make('storage_target_key')
+                    ->label('Storage')
+                    ->badge()
+                    ->placeholder('legacy')
+                    ->formatStateUsing(fn (?string $state): string => $state
+                        ? (string) (config('storage_targets.targets.'.$state.'.label') ?: $state)
+                        : 'Legacy')
+                    ->color(fn (?string $state): string => match ($state) {
+                        'r2_nbx' => 'success',
+                        'contabo_nb_nbx' => 'info',
+                        'contabo_nbx', null => 'gray',
+                        default => 'warning',
+                    })
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('quality'),
                 Tables\Columns\TextColumn::make('format'),
                 Tables\Columns\TextColumn::make('metadata.fetch_status')
@@ -449,7 +476,8 @@ class VideoSourcesRelationManager extends RelationManager
                         'vimeo' => 'Vimeo',
                         'fetched' => 'Fetched',
                         'bunny_stream' => 'Bunny Stream',
-                        'contabo_object_storage' => 'Contabo Object Storage',
+                        'contabo_object_storage' => 'Object Storage',
+                        'legacy_cdn' => 'Legacy CDN',
                         'nbx-engine' => 'NBX Engine',
                         'tele_ob' => 'Tele-OB',
                     ]),
@@ -504,6 +532,7 @@ class VideoSourcesRelationManager extends RelationManager
                             ->deletable(false)
                             ->visible(fn (Forms\Get $get): bool => count($get('variants') ?? []) > 0),
                     ]),
+                $this->legacyCdnMigrationAction('episode'),
                 Tables\Actions\Action::make('sync_nbx')
                     ->label('Sync NBX')
                     ->icon('heroicon-o-arrow-path')
@@ -521,7 +550,7 @@ class VideoSourcesRelationManager extends RelationManager
                     ->icon('heroicon-o-bolt')
                     ->color('success')
                     ->visible(fn (VideoSource $record): bool => in_array($record->type, ['contabo_object_storage', 'url'], true)
-                        && app(ContaboObjectStorageService::class)->isContaboPublicUrl((string) ($record->url ?: $record->file_path ?: (is_array($record->metadata) ? ($record->metadata['public_url'] ?? '') : ''))))
+                        && $this->sourceUsesKnownObjectStorageUrl($record))
                     ->form([
                         Forms\Components\Toggle::make('include_720p')
                             ->label('Also schedule 720p HLS')
@@ -529,14 +558,10 @@ class VideoSourcesRelationManager extends RelationManager
                     ])
                     ->action(function (VideoSource $record, array $data): void {
                         try {
-                            $contabo = app(ContaboObjectStorageService::class);
-                            $url = (string) ($record->url ?: $record->file_path ?: (is_array($record->metadata) ? ($record->metadata['public_url'] ?? '') : ''));
                             $source = app(NbxVideoSourceService::class)->submitObjectStorageBackfill($record->sourceable, [
-                                'key' => $contabo->objectKeyFromPublicUrl($url),
-                                'url' => $url,
-                                'disk' => $contabo->diskName(),
-                                'size' => $record->file_size,
+                                ...$this->objectStorageBackfillPayload($record),
                             ], [
+                                'nbx_storage_target' => $record->storage_target_key ?: 'auto',
                                 'include_720p' => (bool) ($data['include_720p'] ?? false),
                                 'quality' => '480p',
                                 'format' => 'mp4',
@@ -563,6 +588,10 @@ class VideoSourcesRelationManager extends RelationManager
                         }
                         if (in_array($record->type, ['nbx-engine', 'tele_ob'], true)) {
                             $data = array_merge($data, app(NbxVideoSourceService::class)->hydrateProcessingForm($record));
+                        } else {
+                            // Reprocessing/editing defaults to the source's existing
+                            // storage target rather than "auto" unless overridden.
+                            $data['nbx_storage_target'] = $record->storage_target_key ?: 'auto';
                         }
 
                         return $data;
@@ -605,7 +634,7 @@ class VideoSourcesRelationManager extends RelationManager
                 'quality' => (string) ($get('quality') ?? '480p'),
                 'format' => (string) ($get('format') ?? 'mp4'),
                 'import_mode' => 'queue',
-                'nbx_storage_target' => $get('nbx_storage_target') ?? 'contabo',
+                'nbx_storage_target' => $get('nbx_storage_target') ?? 'auto',
                 'nbx_faststart' => (bool) ($get('nbx_faststart') ?? true),
                 'nbx_compress_enabled' => (bool) ($get('nbx_compress_enabled') ?? false),
                 'nbx_hls_480p' => (bool) ($get('nbx_hls_480p') ?? false),
@@ -668,7 +697,7 @@ class VideoSourcesRelationManager extends RelationManager
         $owner = $this->getOwnerRecord();
         $sourceType = (string) ($data['type'] ?? $record?->type ?? 'url');
 
-        if (in_array($sourceType, ['fetched', 'contabo_object_storage', 'nbx-engine'], true) && ! empty($data['imported_source_id'])) {
+        if (in_array($sourceType, ['fetched', 'contabo_object_storage', 'legacy_cdn', 'nbx-engine'], true) && ! empty($data['imported_source_id'])) {
             $importedId = (int) $data['imported_source_id'];
             $existing = VideoSource::where('id', $importedId)
                 ->where('sourceable_type', $owner::class)
@@ -693,6 +722,12 @@ class VideoSourcesRelationManager extends RelationManager
 
         if ($record && in_array($sourceType, ['nbx-engine', 'tele_ob'], true)) {
             return app(NbxVideoSourceService::class)->updateMetadataOnly($record, $data);
+        }
+
+        if ($sourceType === 'legacy_cdn') {
+            return ! empty($data['url'])
+                ? app(NbxVideoSourceService::class)->submitLegacyCdn($owner, $data, 'episode')
+                : throw new \RuntimeException('Please enter the legacy CDN media URL.');
         }
 
         if ($sourceType === 'nbx-engine') {

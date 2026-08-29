@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\VideoSource;
+use App\Support\LegacyCdnUrlResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -78,27 +79,38 @@ class MediaSourceSelectionService
     /**
      * @return array<string, mixed>
      */
-    public function toCandidate(VideoSource $source, bool $primary = false): array
+    public function toCandidate(VideoSource $source, bool $primary = false, ?string $resolvedUrl = null): array
     {
         $this->hydrateIdentity($source);
-        $url = (string) $this->sourceUrl($source);
+        $url = (string) app(LegacyCdnUrlResolver::class)->resolve($resolvedUrl ?: $this->sourceUrl($source));
         $healthStatus = $this->healthStatusForUrl($source, $url);
-        $quality = $source->media_role === 'hls_master'
+        $path = strtolower((string) parse_url($url, PHP_URL_PATH));
+        $isHls = str_ends_with($path, '.m3u8');
+        $role = $isHls
+            ? 'hls_master'
+            : ($url === $this->sourceUrl($source) ? $source->media_role : 'playback_progressive');
+        $quality = $role === 'hls_master'
             ? 'auto'
             : (string) ($source->quality_label ?: $source->quality ?: 'auto');
+        $format = $isHls
+            ? 'm3u8'
+            : strtolower((string) (pathinfo($path, PATHINFO_EXTENSION) ?: $source->format ?: 'mp4'));
+        $browserCompatible = $this->isBrowserCompatibleUrl($url, $format);
 
         return [
             'id' => $source->id,
-            'role' => $source->media_role,
+            'role' => $role,
             'server' => $source->server_key,
             'server_key' => $source->server_key,
             'source_group' => $source->source_group,
-            'format' => strtolower((string) ($source->format ?: 'mp4')),
+            'format' => $format,
             'quality' => strtolower($quality),
             'is_primary' => $primary,
             'isPrimary' => $primary,
             'configured_primary' => (bool) $source->is_primary,
             'is_active' => (bool) $source->is_active,
+            'playback_eligible' => (bool) $source->is_active,
+            'browser_compatible' => $browserCompatible,
             'health_status' => $healthStatus,
             'verified_at' => $healthStatus === 'healthy'
                 ? $source->verified_at?->toIso8601String()
@@ -109,6 +121,89 @@ class MediaSourceSelectionService
         ];
     }
 
+    /**
+     * Return every concrete playback artifact recorded by one source row.
+     *
+     * Older fetched rows commonly retain the ingestion URL in `url` while the
+     * successful local copy lives in `file_path`. The local artifact must be
+     * tried first, without discarding CDN or original URLs as fallbacks.
+     *
+     * @return array<int, string>
+     */
+    public function candidateUrls(VideoSource $source): array
+    {
+        $metadata = (array) ($source->metadata ?? []);
+        $isManagedImport = in_array($source->type, ['nbx-engine', 'tele_ob'], true)
+            || ($metadata['provider'] ?? null) === 'nbx_engine'
+            || isset($metadata['nbx_job_id'])
+            || isset($metadata['cdn_asset_id']);
+        $storedFileUrl = $this->storedFileUrl($source);
+        $primaryUrl = $this->sourceUrl($source);
+        $candidates = in_array($source->type, ['fetched', 'local'], true)
+            ? [
+                $storedFileUrl,
+                $metadata['hls_master_url'] ?? null,
+                $metadata['hls_url'] ?? null,
+                $metadata['mp4_play_url'] ?? null,
+                $metadata['mp4_url'] ?? null,
+                $metadata['download_mp4_url'] ?? null,
+                $metadata['public_url'] ?? null,
+                $primaryUrl,
+                $source->url,
+                $metadata['original_url'] ?? null,
+                $metadata['source_url'] ?? null,
+            ]
+            : [
+                $primaryUrl,
+                $metadata['hls_master_url'] ?? null,
+                $metadata['hls_url'] ?? null,
+                $metadata['mp4_play_url'] ?? null,
+                $metadata['mp4_url'] ?? null,
+                $metadata['download_mp4_url'] ?? null,
+                $metadata['public_url'] ?? null,
+                $storedFileUrl,
+                $source->full_url,
+                $source->url,
+                $metadata['original_url'] ?? null,
+                $metadata['source_url'] ?? null,
+            ];
+
+        return collect($candidates)
+            ->filter(function (mixed $candidate) use ($isManagedImport): bool {
+                if (! is_string($candidate) || trim($candidate) === '') {
+                    return false;
+                }
+
+                $url = trim($candidate);
+                if (preg_match('~^https?://~i', $url) !== 1) {
+                    return false;
+                }
+
+                $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+                if ($host === 't.me' || str_ends_with($host, '.t.me') || str_contains($host, 'telegram.')) {
+                    return false;
+                }
+
+                return ! $isManagedImport || $this->isManagedPlaybackUrl($url);
+            })
+            ->map(fn (string $candidate): string => (string) app(LegacyCdnUrlResolver::class)->resolve(trim($candidate)))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function toCandidates(VideoSource $source, bool $primary = false): array
+    {
+        return collect($this->candidateUrls($source))
+            ->map(fn (string $url, int $index): array => $this->toCandidate(
+                $source,
+                $primary && $index === 0,
+                $url,
+            ))
+            ->all();
+    }
+
     public function sourceUrl(VideoSource $source): ?string
     {
         $metadata = (array) ($source->metadata ?? []);
@@ -117,6 +212,7 @@ class MediaSourceSelectionService
             || ($metadata['provider'] ?? null) === 'nbx_engine'
             || isset($metadata['nbx_job_id'])
             || isset($metadata['cdn_asset_id']);
+        $storedFileUrl = $this->storedFileUrl($source);
 
         // Legacy Tele-OB rows often keep the Telegram message in `url` while
         // the fetched Contabo/NBX output lives in metadata. The fetched output
@@ -125,15 +221,16 @@ class MediaSourceSelectionService
             'hls_master' => [
                 $metadata['hls_master_url'] ?? null,
                 $metadata['hls_url'] ?? null,
+                $storedFileUrl,
                 $source->url,
-                $source->file_path,
             ],
             'faststart_mp4', 'playback_progressive' => [
+                $storedFileUrl,
                 $metadata['mp4_play_url'] ?? null,
                 $metadata['mp4_url'] ?? null,
                 $metadata['download_mp4_url'] ?? null,
+                $source->full_url,
                 $source->url,
-                $source->file_path,
             ],
             default => $isManagedImport
                 ? [
@@ -147,6 +244,7 @@ class MediaSourceSelectionService
                     $metadata['original_url'] ?? null,
                 ]
                 : [
+                    $storedFileUrl,
                     $source->full_url,
                     $source->url,
                     $source->file_path,
@@ -165,10 +263,23 @@ class MediaSourceSelectionService
                 continue;
             }
 
-            return $candidate;
+            return app(LegacyCdnUrlResolver::class)->resolve($candidate);
         }
 
         return null;
+    }
+
+    private function storedFileUrl(VideoSource $source): ?string
+    {
+        $filePath = is_string($source->file_path) ? trim($source->file_path) : '';
+        if ($filePath === '') {
+            return null;
+        }
+        if (preg_match('~^https?://~i', $filePath) === 1) {
+            return $filePath;
+        }
+
+        return asset('storage/'.ltrim($filePath, '/'));
     }
 
     public function hydrateIdentity(VideoSource $source): void
@@ -229,34 +340,13 @@ class MediaSourceSelectionService
             return false;
         }
 
-        if (in_array($source->health_status, ['unreachable', 'invalid'], true)) {
-            $metadata = (array) ($source->metadata ?? []);
-            $checkedUrl = is_string($metadata['health_checked_url'] ?? null)
-                ? trim($metadata['health_checked_url'])
-                : null;
-            $ttlMinutes = max(1, (int) config('video_sources.health.ttl_minutes', 30));
-            $isFresh = $source->last_health_check_at?->gte(now()->subMinutes($ttlMinutes)) ?? false;
-
-            // A legacy Tele-OB row may have been marked unreachable when its
-            // `url` still pointed at Telegram. Do not let that stale verdict
-            // suppress a different fetched Contabo/NBX artifact now selected
-            // from metadata.
-            if ($isFresh && $checkedUrl !== null && hash_equals($checkedUrl, $url)) {
-                return false;
-            }
-        }
-
-        if ($browser && in_array(strtolower((string) $source->format), ['mkv', 'mov', 'avi', 'webm'], true)) {
-            return false;
-        }
-
         return true;
     }
 
     private function score(VideoSource $source, bool $browser): int
     {
         $score = match ($source->media_role) {
-            'hls_master' => 10,
+            'hls_master' => 0,
             'faststart_mp4' => 20,
             'playback_progressive' => 30,
             'source_original' => 60,
@@ -264,21 +354,23 @@ class MediaSourceSelectionService
         };
 
         if ($source->health_status === 'healthy') {
-            $score -= 4;
+            $score -= 2;
         } elseif ($source->health_status === 'degraded') {
-            $score += 20;
+            $score += 3;
         } elseif ($source->health_status === 'unknown') {
-            $score += 8;
+            $score += 1;
         } elseif (in_array($source->health_status, ['unreachable', 'invalid'], true)) {
-            // Stale or URL-mismatched failures remain a last-resort candidate
-            // until the selected artifact is checked directly.
-            $score += 80;
+            $score += 5;
         }
         if ($source->is_primary) {
             $score -= 1;
         }
-        if ($browser && in_array(strtolower((string) $source->format), ['mp4', 'm3u8', 'hls'], true)) {
+        if ($browser && $this->isBrowserCompatibleUrl($this->sourceUrl($source), (string) $source->format)) {
             $score -= 1;
+        } elseif ($browser) {
+            // Keep a valid original/container URL as a last-resort candidate.
+            // Availability and browser decode support are different facts.
+            $score += 20;
         }
 
         return $score;
@@ -291,19 +383,10 @@ class MediaSourceSelectionService
             return $status;
         }
 
-        $metadata = (array) ($source->metadata ?? []);
-        $checkedUrl = is_string($metadata['health_checked_url'] ?? null)
-            ? trim($metadata['health_checked_url'])
-            : null;
-
-        // Health belongs to the URL that was actually probed. If source
-        // resolution has since replaced a Telegram/import URL with a fetched
-        // artifact, do not serialize the old failure as the artifact's state.
-        if ($checkedUrl !== null && ! hash_equals($checkedUrl, $url)) {
-            return 'unknown';
-        }
-
-        return $status;
+        // Health belongs to the URL that was actually probed, and even a
+        // matching old failure is only advisory for playback. Let clients try
+        // concrete media URLs and report only player-observed failures.
+        return 'unknown';
     }
 
     /**
@@ -324,9 +407,28 @@ class MediaSourceSelectionService
 
         $path = strtolower((string) parse_url($url, PHP_URL_PATH));
 
-        return preg_match('/\.(m3u8|mp4|m4v)(?:$|[?#])/i', $url) === 1
+        return preg_match('/\.(m3u8|mp4|m4v|webm|mkv|mov|avi)(?:$|[?#])/i', $url) === 1
             || str_contains($path, '/faststart/')
             || str_contains($path, '/hls/');
+    }
+
+    private function isBrowserCompatibleUrl(?string $url, string $format = ''): bool
+    {
+        $path = strtolower((string) parse_url((string) $url, PHP_URL_PATH));
+        $extension = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($extension, ['mkv', 'mk3d', 'mka', 'mov', 'avi'], true)) {
+            return false;
+        }
+        if (in_array($extension, ['m3u8', 'mp4', 'm4v', 'webm'], true)) {
+            return true;
+        }
+
+        $normalizedFormat = strtolower(trim($format));
+        if (in_array($normalizedFormat, ['hls', 'm3u8', 'mp4', 'm4v', 'webm'], true)) {
+            return true;
+        }
+
+        return $normalizedFormat === '';
     }
 
     private function preferredManagedMetadataUrl(VideoSource $source, array $metadata): ?string

@@ -52,9 +52,9 @@ class CreatorSourceController extends CreatorBaseController
      * Add a new source for a movie.
      *
      * For local upload: creates CDN asset + VideoSource, returns HMAC-signed upload token.
-     * For url/fetched: queues direct import into Contabo Object Storage.
+     * For url/fetched: queues direct import into the selected object-storage target.
      * For youtube/vimeo: creates VideoSource record with url.
-     * For telegram: queues Tele-OB import into Contabo Object Storage.
+     * For telegram: queues Tele-OB import into the selected object-storage target.
      */
     public function storeForMovie(Request $request, int $movieId): JsonResponse
     {
@@ -77,9 +77,11 @@ class CreatorSourceController extends CreatorBaseController
             'hls_480p' => ['nullable', 'boolean'],
             'hls_720p' => ['nullable', 'boolean'],
             'hls_1080p' => ['nullable', 'boolean'],
-            'retention_policy' => ['nullable', 'in:optimized_only,retain_original'],
+            'retention_policy' => ['nullable', 'in:optimized_only,keep_original_only,retain_original'],
             'max_resolution' => ['nullable', 'integer', 'in:480,720,1080'],
             'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
+            'storage_target_key' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
+            'nbx_storage_target' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
         ]);
 
         $type = $validated['type'];
@@ -158,9 +160,11 @@ class CreatorSourceController extends CreatorBaseController
             'hls_480p' => ['nullable', 'boolean'],
             'hls_720p' => ['nullable', 'boolean'],
             'hls_1080p' => ['nullable', 'boolean'],
-            'retention_policy' => ['nullable', 'in:optimized_only,retain_original'],
+            'retention_policy' => ['nullable', 'in:optimized_only,keep_original_only,retain_original'],
             'max_resolution' => ['nullable', 'integer', 'in:480,720,1080'],
             'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
+            'storage_target_key' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
+            'nbx_storage_target' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
         ]);
 
         $type = $validated['type'];
@@ -207,6 +211,8 @@ class CreatorSourceController extends CreatorBaseController
             'size' => ['nullable', 'integer'],
             'quality' => ['nullable', 'string', 'max:20'],
             'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
+            'storage_target_key' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
+            'nbx_storage_target' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
         ]);
 
         return $this->handleDirectUpload(
@@ -230,6 +236,8 @@ class CreatorSourceController extends CreatorBaseController
             'size' => ['required', 'integer', 'min:1'],
             'quality' => ['nullable', 'string', 'max:20'],
             'processing_profile' => ['nullable', Rule::in(array_keys((array) config('creator.processing_profiles', [])))],
+            'storage_target_key' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
+            'nbx_storage_target' => ['nullable', Rule::in($this->creatorStorageTargetKeys())],
         ]);
 
         return $this->handleDirectUpload(
@@ -610,7 +618,7 @@ class CreatorSourceController extends CreatorBaseController
             'is_primary' => (bool) ($validated['is_primary'] ?? $defaultPrimary),
             'is_active' => true,
             'metadata' => $creatorMeta,
-            'nbx_storage_target' => 'contabo',
+            'nbx_storage_target' => $this->creatorStorageTarget($validated),
             'nbx_faststart' => true,
             'nbx_compress_enabled' => (bool) ($validated['compress_enabled'] ?? false),
             'nbx_hls_480p' => (bool) ($validated['hls_480p'] ?? false),
@@ -648,6 +656,24 @@ class CreatorSourceController extends CreatorBaseController
             'message' => 'Direct uploads are limited to '.$this->formatBytes($maxBytes).' per movie source.',
             'max_bytes' => $maxBytes,
         ], 422);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function creatorStorageTargetKeys(): array
+    {
+        return array_values(array_unique(array_merge(
+            ['auto', 'contabo'],
+            array_keys((array) config('storage_targets.targets', [])),
+        )));
+    }
+
+    private function creatorStorageTarget(array $validated): string
+    {
+        $requested = (string) ($validated['storage_target_key'] ?? $validated['nbx_storage_target'] ?? 'auto');
+
+        return $requested === '' ? 'auto' : $requested;
     }
 
     private function handleDirectUpload(
@@ -690,7 +716,7 @@ class CreatorSourceController extends CreatorBaseController
             'is_primary' => (bool) ($validated['is_primary'] ?? ! $content->videoSources()->exists()),
             'is_active' => true,
             'metadata' => array_merge($creatorMeta, ['processing_profile' => $profileKey]),
-            'nbx_storage_target' => 'contabo',
+            'nbx_storage_target' => $this->creatorStorageTarget($validated),
             'nbx_faststart' => (bool) ($profile['faststart_enabled'] ?? true),
             'nbx_compress_enabled' => (bool) ($profile['compress_enabled'] ?? true),
             'nbx_hls_480p' => (bool) ($profile['hls_480p'] ?? true),

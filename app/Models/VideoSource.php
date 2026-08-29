@@ -32,6 +32,7 @@ class VideoSource extends Model
         'storage_disk',
         'storage_bucket',
         'storage_object_key',
+        'storage_target_key',
         'nbx_asset_id',
         'processing_job_id',
         'deleted_from_storage_at',
@@ -171,6 +172,7 @@ class VideoSource extends Model
             'file_size' => $this->file_size,
             'label' => $quality.' '.strtoupper($downloadFormat),
             'is_active' => $this->is_active,
+            'storage_target_key' => $this->storage_target_key,
         ];
 
         if ($existingDownloadSource) {

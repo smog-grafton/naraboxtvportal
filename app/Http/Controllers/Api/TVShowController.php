@@ -119,6 +119,16 @@ class TVShowController extends Controller
                 $query->where('is_featured', true);
             }
 
+            // Country discovery (?country=india, ?country=south-korea, ...)
+            if ($request->filled('country')) {
+                $query->country($request->get('country'));
+            }
+
+            // Title search (?q=...)
+            if ($request->filled('q')) {
+                $query->where('title', 'like', '%'.$request->get('q').'%');
+            }
+
             // Sorting (align with MovieController)
             $sort = $request->get('sort', 'trending');
             $order = strtolower((string) $request->get('order', 'desc')) === 'asc' ? 'asc' : 'desc';
@@ -140,14 +150,51 @@ class TVShowController extends Controller
             $query->orderBy('created_at', 'desc');
 
             $tvShows = $query->paginate($request->get('per_page', 20));
+            $data = $tvShows->map(fn ($tv) => $this->formatTVShowSummary($tv))->values();
+
+            // Some VJ-linked series predate the tv_shows table and still live in the
+            // legacy `movies` table as media_type=SERIES. When browsing a specific VJ's
+            // archive, surface those alongside real tv_shows rows so they aren't silently
+            // dropped from "Discover this archive" / "Translated Works".
+            $legacySeriesCount = 0;
+            if (($request->has('vj_id') || $request->has('vj')) && $tvShows->currentPage() === 1) {
+                $legacyQuery = Movie::where('is_active', true)
+                    ->where('media_type', 'SERIES')
+                    ->publiclyVisible()
+                    ->with(['genres', 'vj', 'mediaLibrary', 'category', 'videoSources']);
+
+                if ($request->has('vj_id')) {
+                    $legacyQuery->where('vj_id', $request->vj_id);
+                } else {
+                    $vjParam = $request->get('vj');
+                    $legacyQuery->whereHas('vj', function ($q) use ($vjParam) {
+                        $q->where('is_active', true)
+                            ->where(function ($subQ) use ($vjParam) {
+                                $subQ->where('slug', $vjParam)
+                                    ->orWhere('id', $vjParam)
+                                    ->orWhere('name', $vjParam);
+                            });
+                    });
+                }
+
+                $legacySeries = $legacyQuery->get();
+                $legacySeriesCount = $legacySeries->count();
+
+                if ($legacySeriesCount > 0) {
+                    $movieController = app(MovieController::class);
+                    $data = $data->concat(
+                        $legacySeries->map(fn ($m) => $movieController->formatMovieSummary($m))
+                    )->values();
+                }
+            }
 
             return response()->json([
-                'data' => $tvShows->map(fn ($tv) => $this->formatTVShowSummary($tv)),
+                'data' => $data,
                 'meta' => [
                     'current_page' => $tvShows->currentPage(),
                     'last_page' => $tvShows->lastPage(),
                     'per_page' => $tvShows->perPage(),
-                    'total' => $tvShows->total(),
+                    'total' => $tvShows->total() + $legacySeriesCount,
                 ],
             ]);
         } catch (\Exception $e) {
@@ -369,7 +416,7 @@ class TVShowController extends Controller
 
         $legacyUrl = trim((string) ($episode->video_url ?? ''));
         if ($legacyUrl !== '') {
-            return $legacyUrl;
+            return app(\App\Support\LegacyCdnUrlResolver::class)->resolve($legacyUrl);
         }
 
         $sources = $episode->relationLoaded('videoSources')
@@ -409,7 +456,7 @@ class TVShowController extends Controller
             $url = trim((string) $candidate);
 
             if ($url !== '') {
-                return $url;
+                return app(\App\Support\LegacyCdnUrlResolver::class)->resolve($url);
             }
         }
 

@@ -16,6 +16,7 @@ class MediaAccessService
 {
     public function __construct(
         private readonly PendingPaymentResolverService $pendingPaymentResolver,
+        private readonly PartnerBenefitService $partnerBenefits,
     ) {}
 
     public function resolveMedia(Model $content): Movie|TVShow|null
@@ -38,7 +39,7 @@ class MediaAccessService
      *
      * @return array<string, mixed>
      */
-    public function evaluate(Movie|TVShow $media, ?User $user): array
+    public function evaluate(Movie|TVShow $media, ?User $user, bool $allowPartnerBenefits = true): array
     {
         $canRent = ! empty($media->price_rent);
         $canBuy = ! empty($media->price_buy);
@@ -106,6 +107,20 @@ class MediaAccessService
                 'code' => 'ACCESS_GRANTED',
                 'expires_at' => $rental->expires_at?->toIso8601String(),
                 'days_remaining' => now()->diffInDays($rental->expires_at, false),
+                'http_status' => 200,
+            ];
+        }
+
+        $partnerMovieOffer = $allowPartnerBenefits && $media instanceof Movie
+            ? $this->partnerBenefits->firstMovieOffer($user, $media)
+            : null;
+        if ($partnerMovieOffer['claimed'] ?? false) {
+            return [
+                'has_access' => true,
+                'access_type' => 'PARTNER_BENEFIT',
+                'reason' => $partnerMovieOffer['message'],
+                'code' => 'ACCESS_GRANTED',
+                'partner_benefit_offer' => $partnerMovieOffer,
                 'http_status' => 200,
             ];
         }
@@ -222,6 +237,10 @@ class MediaAccessService
                 ], $pricing);
             }
 
+            if ($partnerMovieOffer) {
+                return $this->partnerMovieOfferResult($partnerMovieOffer, $pricing);
+            }
+
             $hadExpiredSubscription = UserSubscription::query()
                 ->where('user_id', $user->id)
                 ->where(function ($query) {
@@ -259,6 +278,10 @@ class MediaAccessService
             ->where('expires_at', '<=', now())
             ->exists();
 
+        if ($partnerMovieOffer) {
+            return $this->partnerMovieOfferResult($partnerMovieOffer, $pricing);
+        }
+
         if ($hadExpiredRental) {
             return array_merge([
                 'has_access' => false,
@@ -285,6 +308,19 @@ class MediaAccessService
                 : 'Access to this title is unavailable.',
             'code' => $code,
             'requires_payment' => $canRent || $canBuy,
+            'http_status' => 403,
+            ], $pricing);
+    }
+
+    private function partnerMovieOfferResult(array $offer, array $pricing): array
+    {
+        return array_merge([
+            'has_access' => false,
+            'access_type' => 'PARTNER_OFFER',
+            'reason' => $offer['message'],
+            'code' => 'PARTNER_FIRST_MOVIE_FREE_AVAILABLE',
+            'requires_claim' => true,
+            'partner_benefit_offer' => $offer,
             'http_status' => 403,
         ], $pricing);
     }

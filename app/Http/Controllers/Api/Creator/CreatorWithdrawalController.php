@@ -23,6 +23,7 @@ class CreatorWithdrawalController extends CreatorBaseController
         }
 
         $query = CreatorWithdrawalRequest::where('user_id', $user->id)
+            ->where('beneficiary_type', 'creator')
             ->with('payoutMethod')
             ->orderByDesc('requested_at');
 
@@ -87,7 +88,9 @@ class CreatorWithdrawalController extends CreatorBaseController
             return $this->notCreator();
         }
 
-        $withdrawal = CreatorWithdrawalRequest::where('user_id', $user->id)->findOrFail($id);
+        $withdrawal = CreatorWithdrawalRequest::where('user_id', $user->id)
+            ->where('beneficiary_type', 'creator')
+            ->findOrFail($id);
 
         try {
             $this->withdrawalService->cancel($withdrawal);

@@ -9,6 +9,8 @@ use App\Services\BunnyStreamClientService;
 use App\Services\CdnMediaClientService;
 use App\Services\CdnUrlDerivationService;
 use App\Services\ContaboObjectStorageService;
+use App\Services\Storage\AutomaticStorageSelector;
+use App\Services\Storage\StorageTargetException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -32,6 +34,10 @@ class VideoFetchController extends Controller
             'import_mode' => 'nullable|string|in:now,queue',
             'import_strategy' => 'nullable|string|in:auto,python_worker',
             'storage_target' => 'nullable|string|in:cdn,contabo_object_storage',
+            // Logical bucket target (auto|contabo_nbx|contabo_nb_nbx), distinct
+            // from "storage_target" above which selects the backend (cdn vs
+            // Contabo) rather than which bucket within Contabo.
+            'storage_target_key' => 'nullable|string|max:32',
         ]);
 
         $url = (string) $request->input('url');
@@ -108,6 +114,22 @@ class VideoFetchController extends Controller
             }
 
             if ($storageTarget === 'contabo_object_storage') {
+                $requestedTargetKey = (string) ($request->input('storage_target_key') ?? 'auto');
+
+                try {
+                    // Expected size is unknown before the remote fetch starts;
+                    // this pre-check only rules out targets that are already
+                    // disabled/full so we fail early rather than after a long
+                    // download. fetchUrlToBucket() re-validates once the real
+                    // Content-Length is known.
+                    $resolution = app(AutomaticStorageSelector::class)->resolve($requestedTargetKey, 0);
+                } catch (StorageTargetException $exception) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => $exception->getMessage(),
+                    ], 422);
+                }
+
                 return $this->fetchToContaboObjectStorage(
                     $url,
                     $sourceableType,
@@ -116,7 +138,8 @@ class VideoFetchController extends Controller
                     $quality,
                     $format,
                     $importMode,
-                    app(ContaboObjectStorageService::class)
+                    app(ContaboObjectStorageService::class)->forTarget($resolution['target']->key),
+                    $resolution['target']->key
                 );
             }
 
@@ -392,7 +415,8 @@ class VideoFetchController extends Controller
         string $quality,
         string $format,
         string $importMode,
-        ContaboObjectStorageService $contaboService
+        ContaboObjectStorageService $contaboService,
+        string $storageTargetKey
     ) {
         if ($importMode === 'queue' && ! $contaboService->isContaboPublicUrl($url)) {
             $existingSource = $this->findExistingContaboSource($sourceableType, $sourceableId, $url);
@@ -412,6 +436,7 @@ class VideoFetchController extends Controller
                     'quality' => $quality !== '' ? $quality : ($existingSource->quality ?: 'auto'),
                     'format' => $format !== '' && $format !== 'auto' ? $format : ($existingSource->format ?: 'mp4'),
                     'metadata' => $metadata,
+                    'storage_target_key' => $storageTargetKey,
                     'is_active' => (bool) $existingSource->file_path,
                 ]);
                 $videoSource = $existingSource->fresh();
@@ -427,6 +452,7 @@ class VideoFetchController extends Controller
                     'file_size' => null,
                     'is_primary' => false,
                     'is_active' => false,
+                    'storage_target_key' => $storageTargetKey,
                     'metadata' => $metadata,
                 ]);
             }
@@ -438,7 +464,8 @@ class VideoFetchController extends Controller
                 $sourceableId,
                 $quality,
                 $format,
-                'contabo_object_storage'
+                'contabo_object_storage',
+                $storageTargetKey
             )->onQueue('contabo-imports');
 
             return response()->json([
@@ -550,6 +577,7 @@ class VideoFetchController extends Controller
             'format' => strtolower($resolvedFormat),
             'file_size' => $fileSize ?: $existingSource?->file_size,
             'is_active' => true,
+            'storage_target_key' => $contaboService->targetKey(),
             'metadata' => $metadata,
         ];
 

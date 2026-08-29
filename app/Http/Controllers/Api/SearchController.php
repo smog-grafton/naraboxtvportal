@@ -8,6 +8,7 @@ use App\Models\TVShow;
 use App\Models\VJ;
 use App\Models\Article;
 use App\Support\EditorialArticlePresenter;
+use App\Services\SearchRelevanceService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 
@@ -18,7 +19,10 @@ use Illuminate\Http\Request;
  */
 class SearchController extends Controller
 {
-    public function __construct(private readonly EditorialArticlePresenter $presenter)
+    public function __construct(
+        private readonly EditorialArticlePresenter $presenter,
+        private readonly SearchRelevanceService $relevance,
+    )
     {
     }
 
@@ -65,6 +69,20 @@ class SearchController extends Controller
                     }
                 });
             }
+
+            // A bounded any-token candidate pass lets the in-memory scorer
+            // recover a title when one word was mistyped ("motro city").
+            // The strict score still keeps exact and prefix matches first.
+            if ($tokens !== []) {
+                $outer->orWhere(function (Builder $anyToken) use ($tokens, $textFields) {
+                    foreach ($tokens as $tok) {
+                        $lt = '%'.$this->escapeLike((string) $tok).'%';
+                        $anyToken->orWhere(function (Builder $one) use ($lt, $textFields) {
+                            $textFields($one, $lt, null);
+                        });
+                    }
+                });
+            }
         });
     }
 
@@ -73,7 +91,7 @@ class SearchController extends Controller
      */
     public function search(Request $request)
     {
-        $query = $request->get('q', '');
+        $query = trim((string) $request->get('q', ''));
 
         if (empty($query)) {
             return response()->json([
@@ -98,14 +116,18 @@ class SearchController extends Controller
 
         $normTitleSql = "REPLACE(REPLACE(REPLACE(LOWER(COALESCE(title,'')), ' ', ''), '-', ''), '_', '')";
         $normDescSql = "REPLACE(REPLACE(REPLACE(LOWER(COALESCE(description,'')), ' ', ''), '-', ''), '_', '')";
+        $normOriginalTitleSql = "REPLACE(REPLACE(REPLACE(LOWER(COALESCE(original_title,'')), ' ', ''), '-', ''), '_', '')";
 
         $movieArchives = Movie::where('is_active', true)
-            ->where(function (Builder $q) use ($query, $normTitleSql, $normDescSql) {
-                $this->applyBroadTextFilter($q, $query, function (Builder $w, string $likeRaw, ?string $likeCompact) use ($normTitleSql, $normDescSql) {
+            ->publiclyVisible()
+            ->where(function (Builder $q) use ($query, $normTitleSql, $normDescSql, $normOriginalTitleSql) {
+                $this->applyBroadTextFilter($q, $query, function (Builder $w, string $likeRaw, ?string $likeCompact) use ($normTitleSql, $normDescSql, $normOriginalTitleSql) {
                     $w->where('title', 'like', $likeRaw)
+                        ->orWhere('original_title', 'like', $likeRaw)
                         ->orWhere('description', 'like', $likeRaw);
                     if ($likeCompact !== null) {
                         $w->orWhereRaw("{$normTitleSql} LIKE ?", [$likeCompact])
+                            ->orWhereRaw("{$normOriginalTitleSql} LIKE ?", [$likeCompact])
                             ->orWhereRaw("{$normDescSql} LIKE ?", [$likeCompact]);
                     }
                 });
@@ -118,11 +140,11 @@ class SearchController extends Controller
                 });
             })
             ->with(['genres', 'vj', 'category'])
-            ->limit(35)
+            ->limit(120)
             ->get()
             ->unique('id')
             ->values()
-            ->map(function ($movie) use ($getImageUrl) {
+            ->map(function ($movie) use ($getImageUrl, $query) {
                 return [
                     'id' => (string) $movie->id,
                     'slug' => $movie->slug,
@@ -139,18 +161,29 @@ class SearchController extends Controller
                     'genre' => $movie->genres->pluck('name')->toArray(),
                     'trendingScore' => $movie->trending_score,
                     'accessType' => $movie->access_type,
-                    'videoUrl' => $movie->video_url,
+                    'videoUrl' => app(\App\Support\LegacyCdnUrlResolver::class)->resolve($movie->video_url),
                     'duration' => $movie->duration,
+                    '_search_score' => $this->relevance->score(
+                        $query,
+                        $movie->title,
+                        $movie->description,
+                        $movie->genres->pluck('name')->all(),
+                        $movie->vj?->name,
+                        $movie->original_title,
+                    ),
                 ];
             });
 
         $tvArchives = TVShow::where('is_active', true)
-            ->where(function (Builder $q) use ($query, $normTitleSql, $normDescSql) {
-                $this->applyBroadTextFilter($q, $query, function (Builder $w, string $likeRaw, ?string $likeCompact) use ($normTitleSql, $normDescSql) {
+            ->publiclyVisible()
+            ->where(function (Builder $q) use ($query, $normTitleSql, $normDescSql, $normOriginalTitleSql) {
+                $this->applyBroadTextFilter($q, $query, function (Builder $w, string $likeRaw, ?string $likeCompact) use ($normTitleSql, $normDescSql, $normOriginalTitleSql) {
                     $w->where('title', 'like', $likeRaw)
+                        ->orWhere('original_title', 'like', $likeRaw)
                         ->orWhere('description', 'like', $likeRaw);
                     if ($likeCompact !== null) {
                         $w->orWhereRaw("{$normTitleSql} LIKE ?", [$likeCompact])
+                            ->orWhereRaw("{$normOriginalTitleSql} LIKE ?", [$likeCompact])
                             ->orWhereRaw("{$normDescSql} LIKE ?", [$likeCompact]);
                     }
                 });
@@ -163,11 +196,11 @@ class SearchController extends Controller
                 });
             })
             ->with(['genres', 'vj', 'category'])
-            ->limit(35)
+            ->limit(120)
             ->get()
             ->unique('id')
             ->values()
-            ->map(function ($show) use ($getImageUrl) {
+            ->map(function ($show) use ($getImageUrl, $query) {
                 return [
                     'id' => (string) $show->id,
                     'slug' => $show->slug,
@@ -186,16 +219,31 @@ class SearchController extends Controller
                     'accessType' => $show->access_type,
                     'videoUrl' => null,
                     'duration' => $show->duration,
+                    '_search_score' => $this->relevance->score(
+                        $query,
+                        $show->title,
+                        $show->description,
+                        $show->genres->pluck('name')->all(),
+                        $show->vj?->name,
+                        $show->original_title,
+                    ),
                 ];
             });
 
         $archives = $movieArchives
             ->concat($tvArchives)
-            ->sortByDesc(fn (array $item) => [
-                (float) ($item['trendingScore'] ?? 0),
-                (float) ($item['rating'] ?? 0),
-            ])
+            ->sort(function (array $a, array $b) {
+                return ((int) ($b['_search_score'] ?? 0) <=> (int) ($a['_search_score'] ?? 0))
+                    ?: ((float) ($b['trendingScore'] ?? 0) <=> (float) ($a['trendingScore'] ?? 0))
+                    ?: ((float) ($b['rating'] ?? 0) <=> (float) ($a['rating'] ?? 0))
+                    ?: strcmp((string) ($a['title'] ?? ''), (string) ($b['title'] ?? ''));
+            })
             ->take(40)
+            ->map(function (array $item) {
+                unset($item['_search_score']);
+
+                return $item;
+            })
             ->values();
 
         $normVjName = "REPLACE(REPLACE(REPLACE(LOWER(COALESCE(name,'')), ' ', ''), '-', ''), '_', '')";

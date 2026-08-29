@@ -106,6 +106,42 @@ class NbxVideoSourceEditContractTest extends TestCase
         $this->assertSame('retain_original', $form['nbx_retention_policy']);
     }
 
+    public function test_keep_original_only_round_trips_through_processing_contract(): void
+    {
+        $service = app(NbxVideoSourceService::class);
+        $source = new VideoSource([
+            'type' => 'tele_ob',
+            'url' => 'https://t.me/example/123',
+            'metadata' => [
+                'telegram_url' => 'https://t.me/example/123',
+                'processing_config' => [
+                    'last_request' => [
+                        'storage_target' => 'contabo',
+                        'faststart' => true,
+                        'compression' => false,
+                        'hls' => ['480p' => false, '720p' => false, '1080p' => false],
+                        'retention_policy' => 'keep_original_only',
+                        'max_resolution' => 720,
+                    ],
+                ],
+            ],
+        ]);
+
+        $form = $service->hydrateProcessingForm($source);
+
+        $this->assertSame('https://t.me/example/123', $form['url']);
+        $this->assertSame('keep_original_only', $form['nbx_retention_policy']);
+
+        $method = new \ReflectionMethod(NbxVideoSourceService::class, 'processingRequestFromForm');
+        $request = $method->invoke($service, [
+            'nbx_storage_target' => 'contabo',
+            'nbx_retention_policy' => 'keep_original_only',
+        ]);
+
+        $this->assertSame('keep_original_only', $request['retention_policy']);
+        $this->assertTrue($request['retain_original']);
+    }
+
     public function test_sync_uses_persisted_nbx_source_id_before_mutable_output_url(): void
     {
         config()->set('services.nbx_engine.base_url', 'https://nbx.example');

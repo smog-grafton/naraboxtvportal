@@ -49,6 +49,12 @@ return [
 
     'expiration' => null,
 
+    // First-party app sessions use a short-lived access token and a rotating
+    // refresh token. Existing legacy tokens remain valid until explicitly
+    // revoked, which avoids signing out users during the rollout.
+    'access_token_expiration' => env('SANCTUM_ACCESS_TOKEN_EXPIRATION', 60),
+    'refresh_token_expiration' => env('SANCTUM_REFRESH_TOKEN_EXPIRATION', 43200),
+
     /*
     |--------------------------------------------------------------------------
     | Token Prefix

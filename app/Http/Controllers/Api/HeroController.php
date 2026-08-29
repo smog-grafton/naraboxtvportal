@@ -90,7 +90,7 @@ class HeroController extends Controller
                     'genre' => $media->genres->pluck('name')->toArray(),
                     'trendingScore' => $media->trending_score,
                     'accessType' => $media->access_type,
-                    'videoUrl' => $isSeries ? null : $media->video_url,
+                    'videoUrl' => $isSeries ? null : app(\App\Support\LegacyCdnUrlResolver::class)->resolve($media->video_url),
                     'priceRent' => $media->price_rent ? (int) $media->price_rent : null,
                     'priceBuy' => $media->price_buy ? (int) $media->price_buy : null,
                 ];

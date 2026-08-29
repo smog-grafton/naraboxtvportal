@@ -113,7 +113,7 @@ class ActorController extends Controller
                 'genre' => $movie->genres->pluck('name')->toArray(),
                 'trendingScore' => $movie->trending_score,
                 'accessType' => $movie->access_type,
-                'videoUrl' => $movie->video_url,
+                'videoUrl' => app(\App\Support\LegacyCdnUrlResolver::class)->resolve($movie->video_url),
                 'duration' => $movie->duration,
                 'role' => $movie->pivot->role ?? null,
             ];
@@ -162,4 +162,3 @@ class ActorController extends Controller
         ]);
     }
 }
-

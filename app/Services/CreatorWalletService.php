@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CreatorLedgerEntry;
 use App\Models\CreatorWallet;
+use App\Models\PartnerEarning;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -81,6 +82,7 @@ class CreatorWalletService
         $sums = CreatorLedgerEntry::query()
             ->where('wallet_id', $wallet->id)
             ->where('status', 'posted')
+            ->whereNotIn('reference_type', [PartnerEarning::class, 'partner_withdrawal', 'partner_adjustment'])
             ->selectRaw('bucket, COALESCE(SUM(amount_minor), 0) AS total')
             ->groupBy('bucket')
             ->pluck('total', 'bucket');
@@ -135,6 +137,7 @@ class CreatorWalletService
             $available = (int) CreatorLedgerEntry::where('wallet_id', $wallet->id)
                 ->where('bucket', 'available')
                 ->where('status', 'posted')
+                ->whereNotIn('reference_type', [PartnerEarning::class, 'partner_withdrawal', 'partner_adjustment'])
                 ->sum('amount_minor');
             if ($available < $amountMinor) {
                 throw ValidationException::withMessages(['amount' => ['Insufficient available balance.']]);

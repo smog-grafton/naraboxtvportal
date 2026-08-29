@@ -38,7 +38,7 @@ return [
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
-        'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL') . '/api/v1/auth/google/callback'),
+        'redirect' => env('GOOGLE_REDIRECT_URI', env('APP_URL').'/api/v1/auth/google/callback'),
     ],
 
     'apple' => [
@@ -51,6 +51,7 @@ return [
         'encryption_key' => env('FLW_ENCRYPTION_KEY'),
         'env' => env('FLW_ENV', 'live'),
         'currency' => env('FLW_CURRENCY', 'UGX'),
+        'webhook_secret_hash' => env('FLW_WEBHOOK_SECRET_HASH'),
     ],
 
     'iotec' => [
@@ -62,7 +63,8 @@ return [
         'env' => env('PAWAPAY_ENV', 'sandbox'),
         'base_url' => env('PAWAPAY_BASE_URL', 'https://api.sandbox.pawapay.io'),
         'api_token' => env('PAWAPAY_API_TOKEN'),
-        'verify_callback_signature' => (bool) env('PAWAPAY_VERIFY_CALLBACK_SIGNATURE', false),
+        'verify_callback_signature' => (bool) env('PAWAPAY_VERIFY_CALLBACK_SIGNATURE', true),
+        'webhook_token' => env('PAWAPAY_WEBHOOK_TOKEN'),
         'refund_webhook_token' => env('PAWAPAY_REFUND_WEBHOOK_TOKEN'),
     ],
 
@@ -109,6 +111,7 @@ return [
         'retry_sleep_ms' => (int) env('NBX_ENGINE_RETRY_SLEEP_MS', 800),
         'source_discovery' => (bool) env('NBX_ENGINE_SOURCE_DISCOVERY', true),
         'legacy_cdn_base_url' => env('NBX_LEGACY_CDN_BASE_URL', env('CDN_API_BASE_URL')),
+        'legacy_cdn_hosts' => array_values(array_filter(array_map('trim', explode(',', (string) env('NBX_LEGACY_CDN_HOSTS', 'cdn.naraboxtv.com'))))),
     ],
 
     'bunny_stream' => [

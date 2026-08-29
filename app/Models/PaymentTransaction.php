@@ -24,6 +24,13 @@ class PaymentTransaction extends Model
         'gateway_transaction_id',
         'external_reference',
         'provider_code',
+        'payer_phone',
+        'payment_ip',
+        'device_id',
+        'risk_level',
+        'security_flags',
+        'idempotency_key',
+        'access_granted_at',
         'gateway_response',
         'raw_request',
         'raw_response',
@@ -41,7 +48,25 @@ class PaymentTransaction extends Model
             'raw_response' => 'array',
             'raw_callback' => 'array',
             'meta' => 'array',
+            'security_flags' => 'array',
+            'access_granted_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::creating(function (PaymentTransaction $transaction): void {
+            if (app()->runningInConsole() || ! app()->bound('request')) {
+                return;
+            }
+            $request = request();
+            $transaction->payer_phone ??= $request->attributes->get('security_payer_phone');
+            $transaction->payment_ip ??= $request->attributes->get('security_ip_address');
+            $transaction->device_id ??= $request->attributes->get('security_device_id');
+            $transaction->idempotency_key ??= $request->header('Idempotency-Key')
+                ? mb_substr(trim((string) $request->header('Idempotency-Key')), 0, 128)
+                : null;
+        });
     }
 
     public function user(): BelongsTo
@@ -67,5 +92,10 @@ class PaymentTransaction extends Model
     public function payment(): HasOne
     {
         return $this->hasOne(Payment::class, 'transaction_id');
+    }
+
+    public function partnerEarning(): HasOne
+    {
+        return $this->hasOne(PartnerEarning::class, 'transaction_id');
     }
 }

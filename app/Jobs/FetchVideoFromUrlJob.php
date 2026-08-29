@@ -32,6 +32,7 @@ class FetchVideoFromUrlJob implements ShouldQueue
         public string $quality = 'auto',
         public string $format = 'auto',
         public string $storageTarget = 'cdn',
+        public ?string $storageTargetKey = null,
     ) {
     }
 
@@ -64,6 +65,7 @@ class FetchVideoFromUrlJob implements ShouldQueue
                 'format' => $this->format,
                 'import_mode' => 'now',
                 'storage_target' => $this->storageTarget,
+                'storage_target_key' => $this->storageTargetKey,
             ]);
 
             $response = $controller->fetch($request);

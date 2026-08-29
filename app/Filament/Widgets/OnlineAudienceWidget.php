@@ -2,99 +2,66 @@
 
 namespace App\Filament\Widgets;
 
-use App\Models\OnlineVisitor;
+use App\Services\PresenceService;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Schema;
 
 class OnlineAudienceWidget extends StatsOverviewWidget
 {
-    private const ACTIVE_WINDOW_MINUTES = 5;
-
     protected static ?int $sort = 1;
 
     protected static ?string $pollingInterval = '30s';
 
     protected ?string $heading = 'Audience Online';
 
-    protected ?string $description = 'Live presence across the app and website, based on activity seen in the last 5 minutes.';
+    protected ?string $description = 'Explicit foreground heartbeats only; normal API requests are not counted as online activity.';
 
     protected function getStats(): array
     {
-        if (! Schema::hasTable('online_visitors')) {
-            return $this->emptyStats('Run the latest migration to enable live audience tracking.');
-        }
-
-        $activeVisitors = OnlineVisitor::query()
-            ->active(now()->subMinutes(self::ACTIVE_WINDOW_MINUTES))
-            ->get(['visitor_key', 'user_id', 'platform']);
-
-        $loggedIn = $activeVisitors
-            ->filter(fn (OnlineVisitor $visitor) => filled($visitor->user_id))
-            ->pluck('user_id')
-            ->unique()
-            ->count();
-
-        $guests = $activeVisitors
-            ->filter(fn (OnlineVisitor $visitor) => blank($visitor->user_id))
-            ->count();
-
-        $inApp = $this->countUniqueVisitors(
-            $activeVisitors->filter(fn (OnlineVisitor $visitor) => $visitor->platform === 'app')
-        );
-
-        $onWebsite = $this->countUniqueVisitors(
-            $activeVisitors->filter(fn (OnlineVisitor $visitor) => $visitor->platform === 'web')
-        );
+        $snapshot = app(PresenceService::class)->snapshot();
+        $platforms = $snapshot['platforms'];
 
         return [
-            Stat::make('Total Online', number_format($this->countUniqueVisitors($activeVisitors)))
-                ->description("Seen in the last " . self::ACTIVE_WINDOW_MINUTES . ' minutes')
+            Stat::make('People Online', number_format($snapshot['people_online']))
+                ->description('Unique accounts plus stable guest identities')
                 ->descriptionIcon('heroicon-m-signal')
                 ->icon('heroicon-o-signal')
                 ->color('success'),
-            Stat::make('Logged In', number_format($loggedIn))
-                ->description('Authenticated users active across app and web')
+            Stat::make('Authenticated', number_format($snapshot['unique_accounts_online']))
+                ->description('Unique signed-in accounts with a live heartbeat')
                 ->descriptionIcon('heroicon-m-user-circle')
                 ->icon('heroicon-o-user-circle')
                 ->color('primary'),
-            Stat::make('Guests', number_format($guests))
-                ->description('Visitors active without logging in')
+            Stat::make('Guests', number_format($snapshot['guests_online']))
+                ->description('Stable anonymous browser/device identities')
                 ->descriptionIcon('heroicon-m-user-plus')
                 ->icon('heroicon-o-user-plus')
                 ->color('warning'),
-            Stat::make('In App', number_format($inApp))
-                ->description('Active API and app traffic')
+            Stat::make('Active Devices', number_format($snapshot['active_devices']))
+                ->description('Heartbeating browser/device identities')
+                ->descriptionIcon('heroicon-m-device-phone-mobile')
+                ->icon('heroicon-o-device-phone-mobile')
+                ->color('gray'),
+            Stat::make('Web', number_format($platforms['web'] ?? 0))
+                ->description('Visible browser sessions')
                 ->descriptionIcon('heroicon-m-device-phone-mobile')
                 ->icon('heroicon-o-device-phone-mobile')
                 ->color('info'),
-            Stat::make('On Website', number_format($onWebsite))
-                ->description('Active website and browser traffic')
+            Stat::make('Android', number_format($platforms['android'] ?? 0))
+                ->description('Foreground Android sessions')
+                ->descriptionIcon('heroicon-m-device-phone-mobile')
+                ->icon('heroicon-o-device-phone-mobile')
+                ->color('success'),
+            Stat::make('iOS', number_format($platforms['ios'] ?? 0))
+                ->description('Foreground iOS sessions')
+                ->descriptionIcon('heroicon-m-device-phone-mobile')
+                ->icon('heroicon-o-device-phone-mobile')
+                ->color('primary'),
+            Stat::make('Android TV', number_format($platforms['android_tv'] ?? 0))
+                ->description('Foreground Android TV sessions')
                 ->descriptionIcon('heroicon-m-globe-alt')
                 ->icon('heroicon-o-globe-alt')
-                ->color('gray'),
-        ];
-    }
-
-    private function countUniqueVisitors(Collection $visitors): int
-    {
-        return $visitors
-            ->map(fn (OnlineVisitor $visitor) => $visitor->user_id
-                ? 'user:' . $visitor->user_id
-                : 'guest:' . $visitor->visitor_key)
-            ->unique()
-            ->count();
-    }
-
-    private function emptyStats(string $description): array
-    {
-        return [
-            Stat::make('Total Online', '0')
-                ->description($description)
-                ->descriptionIcon('heroicon-m-information-circle')
-                ->icon('heroicon-o-signal')
-                ->color('gray'),
+                ->color('warning'),
         ];
     }
 }

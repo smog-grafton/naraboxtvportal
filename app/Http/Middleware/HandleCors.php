@@ -53,7 +53,7 @@ class HandleCors
             return response('', 200)
                 ->header('Access-Control-Allow-Origin', $isAllowed || !$origin ? ($origin ?: '*') : '*')
                 ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key')
+                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key, X-NBX-Device-ID, Idempotency-Key')
                 ->header('Access-Control-Allow-Credentials', 'true')
                 ->header('Access-Control-Max-Age', '86400');
         }
@@ -100,12 +100,11 @@ class HandleCors
         if ($isAllowed || !$origin) {
             $response->headers->set('Access-Control-Allow-Origin', $origin ?: '*');
             $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-            $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key');
+            $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-API-KEY, X-Api-Key, X-NBX-Device-ID, Idempotency-Key');
             $response->headers->set('Access-Control-Allow-Credentials', 'true');
-            $response->headers->set('Access-Control-Expose-Headers', '');
+            $response->headers->set('Access-Control-Expose-Headers', 'Retry-After');
         }
 
         return $response;
     }
 }
-
