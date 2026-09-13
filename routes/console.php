@@ -99,6 +99,14 @@ if ((bool) config('services.nbx_engine.scheduled_backfill_enabled', false)) {
         ->hourly();
 }
 
+if ((bool) config('services.telebot.telescope_scheduled_sync_enabled', true)) {
+    $limit = max(1, (int) config('services.telebot.telescope_scheduled_sync_limit', 100));
+    Schedule::command('telescope:sync-video-sources --limit='.$limit)
+        ->name('telescope:sync-video-sources')
+        ->withoutOverlapping()
+        ->everyMinute();
+}
+
 // Keep contabo imports processing via cron-driven scheduler.
 // This pattern is safe with shared hosting or when Supervisor is unavailable.
 Schedule::command('queue:work database --queue=contabo-imports --timeout=21600 --tries=1 --sleep=3 --stop-when-empty')

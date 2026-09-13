@@ -170,6 +170,9 @@ return [
         'max_active_jobs' => (int) env('TELEBOT_MAX_ACTIVE_JOBS', 2),
         'max_portal_objects' => (int) env('TELEBOT_MAX_PORTAL_OBJECTS', 3),
         'destroy_after_import' => (bool) env('TELEBOT_DESTROY_AFTER_IMPORT', true),
+        'callback_secret' => env('TELESCOPE_CALLBACK_SECRET'),
+        'telescope_scheduled_sync_enabled' => env('TELESCOPE_SCHEDULED_SYNC_ENABLED', true),
+        'telescope_scheduled_sync_limit' => env('TELESCOPE_SCHEDULED_SYNC_LIMIT', 100),
     ],
 
     'creator' => [

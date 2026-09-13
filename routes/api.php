@@ -50,6 +50,7 @@ use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SubtitleFetchController;
 use App\Http\Controllers\Api\TelegramIngestNotifyController;
+use App\Http\Controllers\Api\TeletydeStorageEventController;
 use App\Http\Controllers\Api\TrendingController;
 use App\Http\Controllers\Api\TvController;
 use App\Http\Controllers\Api\TVShowController;
@@ -90,6 +91,9 @@ Route::post('/cdn/fetch-and-push', [CdnFetchProxyController::class, 'fetchAndPus
 
 Route::post('/telegram/ingest-notify', [TelegramIngestNotifyController::class, 'notify'])
     ->middleware('throttle:30,1');
+
+Route::post('/v1/teletyde/storage-events', [TeletydeStorageEventController::class, 'handle'])
+    ->middleware('throttle:240,1');
 
 Route::post('/nbx/webhook', [NbxWebhookController::class, 'handle'])
     ->middleware('throttle:120,1');

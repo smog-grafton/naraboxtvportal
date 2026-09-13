@@ -71,6 +71,65 @@ class TelebotClientService
     }
 
     /**
+     * Submit once to Teletyde's persistent direct-storage queue. Capacity is
+     * owned by Teletyde, so Portal must not poll capacity and resubmit.
+     *
+     * @return array{ok: bool, job_id?: string|null, data?: array|null, error?: string|null, status_code?: int|null}
+     */
+    public function createTelescopeJob(
+        string $telegramUrl,
+        int $portalSourceId,
+        string $storageTarget = 'auto',
+        array $metadata = [],
+        array $processing = [],
+    ): array {
+        $result = $this->request('post', '/api/worker/telescope/jobs', [
+            'link' => $telegramUrl,
+            'portal_source_id' => $portalSourceId,
+            'storage_target' => $storageTarget,
+            'metadata' => $metadata,
+            'processing' => \App\Services\Media\TelegramProcessingProfile::normalize($processing),
+        ]);
+
+        $data = is_array($result['data'] ?? null) ? $result['data'] : [];
+        $jobId = (string) ($data['job_id'] ?? '');
+
+        if (! ($result['ok'] ?? false)) {
+            return $result + ['job_id' => null];
+        }
+
+        if ($jobId === '') {
+            return array_merge($result, ['ok' => false, 'job_id' => null, 'error' => 'Teletyde accepted the request but did not return a job ID.']);
+        }
+
+        return $result + ['job_id' => $jobId];
+    }
+
+    /** @return array{ok: bool, data?: array|null, error?: string|null, status_code?: int|null} */
+    public function telescopeJobStatus(string $jobId): array
+    {
+        return $this->request('get', '/api/worker/telescope/jobs/'.rawurlencode($jobId));
+    }
+
+    /** @return array{ok: bool, data?: array|null, error?: string|null, status_code?: int|null} */
+    public function retryTelescopeJob(string $jobId): array
+    {
+        return $this->request('post', '/api/worker/telescope/jobs/'.rawurlencode($jobId).'/retry');
+    }
+
+    /** @return array{ok: bool, data?: array|null, error?: string|null, status_code?: int|null} */
+    public function destroyTelescopeJob(string $jobId): array
+    {
+        return $this->request('post', '/api/worker/telescope/jobs/'.rawurlencode($jobId).'/destroy');
+    }
+
+    /** @return array{ok: bool, data?: array|null, error?: string|null, status_code?: int|null} */
+    public function cancelTelescopeJob(string $jobId): array
+    {
+        return $this->request('post', '/api/worker/telescope/jobs/'.rawurlencode($jobId).'/cancel');
+    }
+
+    /**
      * @return array{ok: bool, data?: array|null, error?: string|null, status_code?: int|null}
      */
     public function jobStatus(string $jobId): array
